@@ -1,4 +1,31 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><script>
+(function(){
+  var KEY="evac_view";
+  function get(){ try { return localStorage.getItem(KEY); } catch(e){ return null; } }
+  var touch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+  var phone = touch && Math.min(screen.width, screen.height) < 700;
+  var mode = get() || "desk";
+  function setMeta(c){
+    var old = document.querySelectorAll('meta[name="viewport"]');
+    for (var i=0;i<old.length;i++) old[i].parentNode.removeChild(old[i]);
+    var m = document.createElement("meta"); m.name = "viewport"; m.content = c;
+    document.head.appendChild(m);
+  }
+  var DESK="width=1280,minimum-scale=0.1,maximum-scale=6,user-scalable=yes,viewport-fit=cover";
+  var NORM="width=device-width,initial-scale=1,viewport-fit=cover";
+  window.evacVp = function(inApp){ if (phone) setMeta(inApp && mode !== "phone" ? DESK : NORM); };
+  window.evacVp(false);
+  window.toggleView = function(){
+    try { localStorage.setItem(KEY, mode === "phone" ? "desk" : "phone"); } catch(e){}
+    location.reload();
+  };
+  document.addEventListener("DOMContentLoaded", function(){
+    var b = document.getElementById("viewBtn");
+    if (b && phone) { b.style.display = ""; b.textContent = mode === "phone" ? "Вид: ПК" : "Вид: телефон"; }
+  });
+})();
+</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <title>Эвакуация КТК</title>
 <style>
   :root {
@@ -297,6 +324,7 @@
   <div class="topbar-actions">
     <span class="sync-chip" id="syncChip"></span>
     <span class="user-chip" id="userChip"></span>
+    <button class="tb-btn" id="viewBtn" style="display:none" onclick="toggleView()"></button>
     <button class="tb-btn" onclick="logoutUser()">Выйти</button>
     <span class="month-pill" id="monthPill"></span>
   </div>
@@ -2891,6 +2919,7 @@ function logoHtml(){ const l = document.querySelector(".topbar .logo"); return l
 function renderAuth(mode, msg){
   const root = authRoot(); if (!root) return;
   root.style.display = "flex";
+  try { window.evacVp && window.evacVp(false); } catch(e){}
   let body = "";
   const note = msg ? '<div class="auth-msg">'+esc(msg)+'</div>' : "";
   if (mode==="loading") {
@@ -2962,6 +2991,7 @@ function enterApp(id, u, remember){
   ONLINE.ready = true;
   if (remember && !ONLINE.server) { try { localStorage.setItem("evac_sess", JSON.stringify({ id, hash:u.hash })); } catch(e){} }
   authRoot().style.display = "none";
+  try { window.evacVp && window.evacVp(true); } catch(e){}
   if (ONLINE.isAdmin && !ONLINE.unsubLog) { if (ONLINE.server) { ONLINE.unsubLog = ()=>{}; refreshServerLog(); } else ONLINE.unsubLog = ONLINE.db.collection("log").onSnapshot(onLogSnap, ()=>{}); }
   if (!ONLINE.isAdmin && state.tab==="admin") state.tab = "dashboard";
   ONLINE.myLog = ((ONLINE.logs.length ? [] : [])).slice();

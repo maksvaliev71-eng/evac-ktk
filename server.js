@@ -1,7 +1,7 @@
 // Сервер «Эвакуация КТК». Без внешних зависимостей, нужен Node.js 18 или новее.
 // Запуск: node server.js   (порт и папка данных задаются переменными PORT и DATA_DIR)
 "use strict";
-const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto");
+const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto"), zlib = require("zlib");
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, "data"));
@@ -85,7 +85,15 @@ function addLog(me, id) {
 // ---------- HTTP ----------
 function send(res, code, obj, headers) {
   const body = typeof obj === "string" ? obj : JSON.stringify(obj);
-  res.writeHead(code, Object.assign({ "Content-Type": typeof obj === "string" ? "text/html; charset=utf-8" : "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, headers || {}));
+  const h = Object.assign({ "Content-Type": typeof obj === "string" ? "text/html; charset=utf-8" : "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Vary": "Accept-Encoding" }, headers || {});
+  const ae = String((res.req && res.req.headers["accept-encoding"]) || "");
+  if (body.length > 1024 && /\bgzip\b/.test(ae)) {
+    h["Content-Encoding"] = "gzip";
+    const gz = zlib.gzipSync(body, { level: 6 });
+    h["Content-Length"] = gz.length;
+    res.writeHead(code, h); return res.end(gz);
+  }
+  res.writeHead(code, h);
   res.end(body);
 }
 function readBody(req, limit) {

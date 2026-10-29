@@ -116,7 +116,10 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x"); const p = url.pathname;
   try {
     if (req.method === "GET" && (p === "/" || p === "/index.html")) {
-      return send(res, 200, fs.readFileSync(INDEX, "utf8"));
+      const html = fs.readFileSync(INDEX, "utf8");
+      const etag = '"' + crypto.createHash("md5").update(html).digest("hex") + '"';
+      if (req.headers["if-none-match"] === etag) { res.writeHead(304, { "ETag": etag, "Cache-Control": "no-cache" }); return res.end(); }
+      return send(res, 200, html, { "ETag": etag, "Cache-Control": "no-cache" });
     }
     if (!p.startsWith("/api/")) return send(res, 404, { error: "Не найдено" });
     const ip = req.socket.remoteAddress || "";

@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: evac-ktk
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/status
+    disk:
+      name: evac-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data

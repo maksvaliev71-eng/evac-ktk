@@ -34,6 +34,9 @@ let ext = readJson(EXT_F, {});          // статусы готовности, 
 ext.status = ext.status || {}; ext.deadlines = ext.deadlines || {}; ext.comments = ext.comments || []; ext.reminded = ext.reminded || {};
 const MAIL_DEF = { enabled: false, mode: "ssl", host: "", port: 465, user: "", pass: "", from: "", siteUrl: "", evReady: true, evAll: true, evClosed: true, evRemind: true };
 let mailCfg = Object.assign({}, MAIL_DEF, readJson(MAIL_F, {}));
+const HIST_F = path.join(DATA_DIR, "history.jsonl");
+let history = [];   // последние правки по ячейкам: {t,u,n,d,doc,p,f,v}
+try { history = fs.readFileSync(HIST_F, "utf8").split("\n").filter(Boolean).slice(-8000).map(l => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean); fs.writeFileSync(HIST_F, history.map(h => JSON.stringify(h)).join("\n") + (history.length ? "\n" : "")); } catch (e) { history = []; }
 const appDocs = {};
 for (const f of fs.readdirSync(APP_DIR)) { if (f.endsWith(".json")) appDocs[f.slice(0, -5)] = readJson(path.join(APP_DIR, f), {}); }
 
@@ -69,6 +72,7 @@ function canWriteDoc(me, id) {
   if (me.dept === "admin") return true;
   const a = areaOfDoc(id);
   if (a === "archive" || a === "meta") return false;
+  if (a.indexOf("reasons_") === 0) return a === "reasons_" + me.dept;
   return permsFor(me.dept).includes(a);
 }
 // какой части статуса соответствует область данных
@@ -77,9 +81,9 @@ const AREA_KIND = {
   plan_export: { dept: "export", kind: "plan" }, fact_export: { dept: "export", kind: "fact" },
   import: { dept: "import", kind: "import" }, routes: { dept: "rail", kind: "rail" },
 };
-const STATUS_KINDS = { vnutriros: ["plan", "fact"], export: ["plan", "fact"], import: ["import"], rail: ["rail"] };
-const KIND_LABEL = { plan: "план", fact: "факт", import: "сдача импорта", rail: "поезда" };
-const DEPT_LABEL = { vnutriros: "Внутрироссийский", export: "Экспортный", import: "Импорт", rail: "ЖД отдел", viewer: "Отчётность", manager: "Руководитель", admin: "Администратор" };
+const STATUS_KINDS = { vnutriros: ["plan", "fact"], export: ["plan", "fact"], expl: ["plan"], import: ["import"], rail: ["rail", "railfact"] };
+const KIND_LABEL = { plan: "план", fact: "факт", import: "сдача импорта", rail: "поезда: ТЕУ, план, доли", railfact: "поезда: факт" };
+const DEPT_LABEL = { vnutriros: "Внутрироссийский", export: "Экспортный", expl: "Эксплуатация", import: "Импорт", rail: "ЖД отдел", viewer: "Отчётность", manager: "Руководитель", admin: "Администратор" };
 function mskToday() { return new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10); }
 function mskHour() { return new Date(Date.now() + 3 * 3600000).getUTCHours(); }
 function deadlineLocked(kind) {
@@ -93,7 +97,7 @@ function writeDenied(me, id) {
   return null;
 }
 function saveExt() { writeJson(EXT_F, ext); broadcast("ext", {}); }
-function publicExt() { return { status: ext.status, deadlines: ext.deadlines, comments: ext.comments }; }
+function publicExt(me) { return { status: ext.status, deadlines: ext.deadlines, comments: (me && (me.dept === "admin" || me.dept === "manager")) ? ext.comments : [] }; }
 
 // ---------- события (SSE) ----------
 const clients = new Set();
@@ -112,6 +116,28 @@ function addLog(me, id) {
 function addLogText(me, text) {
   logs.unshift({ t: Date.now(), u: me.id, n: me.name, d: me.dept, a: [text] });
   logs = logs.slice(0, 500); writeJson(LOG_F, logs); broadcast("log", {});
+}
+
+// ---------- история правок по ячейкам ----------
+function flatten(v, pre, out) {
+  if (v && typeof v === "object") { for (const k of Object.keys(v)) flatten(v[k], pre ? pre + "." + k : k, out); }
+  else out[pre] = v;
+  return out;
+}
+function recordHistory(me, doc, before, after) {
+  if (doc === "meta") return;
+  const a = flatten(before || {}, "", {}), b = flatten(after || {}, "", {}), ch = [], t = Date.now();
+  for (const k of new Set(Object.keys(a).concat(Object.keys(b)))) {
+    if (doc === "forecast" && /^log(\.|$)/.test(k)) continue;
+    const x = a[k], y = b[k];
+    if (x === y || (x === undefined && (y === 0 || y === "")) || (y === undefined && (x === 0 || x === ""))) continue;
+    ch.push({ t, u: me.id, n: me.name, d: me.dept, doc, p: k, f: x === undefined ? null : x, v: y === undefined ? null : y });
+  }
+  if (!ch.length) return;
+  const rows = ch.length > 300 ? [{ t, u: me.id, n: me.name, d: me.dept, doc, p: "*", f: null, v: null, c: ch.length }] : ch;
+  fs.appendFileSync(HIST_F, rows.map(h => JSON.stringify(h)).join("\n") + "\n");
+  history.push(...rows);
+  if (history.length > 10000) { history = history.slice(-8000); fs.writeFileSync(HIST_F, history.map(h => JSON.stringify(h)).join("\n") + "\n"); }
 }
 
 // ---------- почта (SMTP без внешних библиотек) ----------
@@ -165,6 +191,14 @@ function smtpSend(cfg, rcpts, subject, text) {
     })().catch(fail);
   });
 }
+function mailErrText(e) {
+  const m = String((e && e.message) || e), c = e && e.code;
+  if (/\b53[45]\b|Authentication|auth/i.test(m)) return m + ". Почта не приняла логин или пароль. Для Mail.ru нужен «пароль для внешнего приложения», а не обычный пароль от ящика.";
+  if (c === "ETIMEDOUT" || /Таймаут/.test(m)) return "Нет связи с почтовым сервером (таймаут). Возможно, хостинг блокирует исходящий порт " + (mailCfg.port || "") + ". Попробуйте другой порт или режим (SSL 465 / STARTTLS 587).";
+  if (c === "ECONNREFUSED") return "Почтовый сервер отклонил соединение (порт " + (mailCfg.port || "") + " закрыт). Проверьте адрес сервера и порт.";
+  if (c === "ENOTFOUND" || c === "EAI_AGAIN") return "Адрес почтового сервера не найден: " + (mailCfg.host || "") + ".";
+  return m;
+}
 let mailChain = Promise.resolve();
 function sendMail(rcpts, subject, text) {
   rcpts = [...new Set(rcpts.filter(Boolean))];
@@ -172,7 +206,7 @@ function sendMail(rcpts, subject, text) {
   const full = (mailCfg.siteUrl ? text + "\n\n" + mailCfg.siteUrl : text);
   mailChain = mailChain.then(() => smtpSend(mailCfg, rcpts, "[Эвакуация КТК] " + subject, full)
     .then(() => { mailLog.unshift({ t: Date.now(), to: rcpts.join(", "), s: subject, ok: true }); })
-    .catch(e => { mailLog.unshift({ t: Date.now(), to: rcpts.join(", "), s: subject, ok: false, err: e.message }); }))
+    .catch(e => { mailLog.unshift({ t: Date.now(), to: rcpts.join(", "), s: subject, ok: false, err: mailErrText(e) }); }))
     .then(() => { mailLog.length = Math.min(mailLog.length, 30); });
   return mailChain;
 }
@@ -212,7 +246,7 @@ function remindersCheck() {
   const today = mskToday(), tomorrow = new Date(Date.now() + 3 * 3600000 + 86400000).toISOString().slice(0, 10);
   let dirty = false;
   for (const dept of Object.keys(STATUS_KINDS)) for (const kind of STATUS_KINDS[dept]) {
-    const d = ext.deadlines[kind]; if (!d || (d !== today && d !== tomorrow)) continue;
+    const d = ext.deadlines[kind === "railfact" ? "rail" : kind]; if (!d || (d !== today && d !== tomorrow)) continue;
     const st = ext.status[dept] && ext.status[dept][kind]; if (st && st.ready && !st.dirty) continue;
     const key = dept + "|" + kind + "|" + d + "|" + today; if (ext.reminded[key]) continue;
     ext.reminded[key] = 1; dirty = true;
@@ -296,8 +330,19 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/app" && req.method === "GET") return send(res, 200, { docs: appDocs });
     if (p === "/api/users" && req.method === "GET") return send(res, 200, { users: publicUsers(me.dept === "admin") });
     if (p === "/api/perms" && req.method === "GET") return send(res, 200, { map: perms ? perms.map : null });
-    if (p === "/api/log" && req.method === "GET") return send(res, 200, { entries: logs.slice(0, me.dept === "admin" ? 80 : 30) });
-    if (p === "/api/ext" && req.method === "GET") return send(res, 200, publicExt());
+    if (p === "/api/log" && req.method === "GET") return send(res, 200, { entries: logs.slice(0, me.dept === "admin" ? 500 : 30) });
+    if (p === "/api/password" && req.method === "POST") {
+      if (tooMany("pw|" + me.id)) return send(res, 429, { error: "Слишком много попыток, подождите минуту" });
+      const b = await readBody(req, 2000), u = users[me.id];
+      if (!b.old || !b.new || String(b.new).length < 6) return send(res, 400, { error: "Новый пароль не короче 6 знаков" });
+      if (!crypto.timingSafeEqual(Buffer.from(hashPw(String(b.old), u.salt), "hex"), Buffer.from(u.hash, "hex"))) return send(res, 403, { error: "Старый пароль неверный" });
+      const salt = crypto.randomBytes(16).toString("hex");
+      u.salt = salt; u.iter = ITER; u.hash = hashPw(String(b.new), salt); writeJson(USERS_F, users);
+      const keep = parseCookies(req).evac_sid;
+      for (const [t, uid] of sessions) if (uid === me.id && t !== keep) sessions.delete(t);
+      return send(res, 200, { ok: true });
+    }
+    if (p === "/api/ext" && req.method === "GET") return send(res, 200, publicExt(me));
     if (p === "/api/status" && req.method === "POST") {
       const b = await readBody(req, 2000);
       const dept = (me.dept === "admin" && b.dept) ? String(b.dept) : me.dept, kind = String(b.kind || "");
@@ -346,10 +391,21 @@ const server = http.createServer(async (req, res) => {
         const before = appDocs[id], oldCursor = id === "meta" && before ? before.monthCursor : undefined;
         const changed = JSON.stringify(before) !== JSON.stringify(b);
         appDocs[id] = b; writeJson(path.join(APP_DIR, id + ".json"), b);
+        if (changed) { try { recordHistory(me, id, before, b); } catch (e) { console.error("history:", e.message); } }
         broadcast("app", { id, data: b }); addLog(me, id);
         if (changed && me.dept !== "admin") {
-          const ak = AREA_KIND[id], st = ak && ext.status[ak.dept] && ext.status[ak.dept][ak.kind];
-          if (st && st.ready && !st.dirty) { st.dirty = true; saveExt(); }
+          const ak = AREA_KIND[id];
+          if (ak) {
+            let kinds = [ak.kind];
+            if (id === "routes") {
+              const fa = flatten(before || {}, "", {}), fb = flatten(b, "", {}); kinds = [];
+              for (const k of new Set(Object.keys(fa).concat(Object.keys(fb)))) if (fa[k] !== fb[k]) kinds.push(/\.fact$/.test(k) ? "railfact" : "rail");
+              kinds = [...new Set(kinds)];
+            }
+            let mark = false;
+            for (const kd of kinds) { const st = ext.status[ak.dept] && ext.status[ak.dept][kd]; if (st && st.ready && !st.dirty) { st.dirty = true; mark = true; } }
+            if (mark) saveExt();
+          }
         }
         if (id === "meta" && oldCursor !== undefined && b.monthCursor !== oldCursor) {
           ext.status = {}; ext.deadlines = {}; ext.reminded = {}; saveExt();
@@ -411,6 +467,7 @@ const server = http.createServer(async (req, res) => {
       for (const k of ["plan", "fact", "import", "rail"]) { const v = String(b[k] || ""); if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) return send(res, 400, { error: "Неверная дата" }); if (v) d[k] = v; }
       ext.deadlines = d; saveExt(); return send(res, 200, { ok: true });
     }
+    if (p === "/api/history" && req.method === "GET") return send(res, 200, { rows: history.slice(-4000).reverse() });
     if (p === "/api/mail" && req.method === "GET") { const c = Object.assign({}, mailCfg); c.hasPass = !!c.pass; delete c.pass; return send(res, 200, { cfg: c, log: mailLog }); }
     if (p === "/api/mail" && req.method === "PUT") {
       const b = await readBody(req, 5000), n = Object.assign({}, mailCfg);
@@ -426,7 +483,7 @@ const server = http.createServer(async (req, res) => {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return send(res, 400, { error: "Укажите e-mail для проверки" });
       if (!mailCfg.host) return send(res, 400, { error: "Сначала заполните адрес почтового сервера" });
       try { await smtpSend(mailCfg, [to], "[Эвакуация КТК] Проверка почты", "Это тестовое письмо. Если вы его видите, почта настроена верно."); return send(res, 200, { ok: true }); }
-      catch (e) { return send(res, 400, { error: e.message }); }
+      catch (e) { mailLog.unshift({ t: Date.now(), to: to, s: "Проверка почты", ok: false, err: mailErrText(e) }); return send(res, 400, { error: mailErrText(e) }); }
     }
     if (p === "/api/backups" && req.method === "GET") return send(res, 200, { list: backupList() });
     if (p === "/api/backups" && req.method === "POST") { try { return send(res, 200, { name: makeBackup("hand" + new Date().toISOString().slice(11, 19).replace(/:/g, "")) }); } catch (e) { return send(res, 400, { error: e.message }); } }

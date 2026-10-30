@@ -266,8 +266,10 @@
 .auth-logo{background:#004D77;margin-bottom:22px}.auth-logo .logo{display:block;height:54px;width:auto;max-width:100%}
 .auth-title{font-size:20px;font-weight:700;margin:0 0 6px;color:#fff}
 .auth-sub{font-size:13px;color:#C9DCE8;margin:0 0 14px;line-height:1.5}
-.auth-l{display:block;font-size:11.5px;font-weight:600;color:#C9DCE8;text-transform:uppercase;letter-spacing:.04em;margin:12px 0 5px}
-.auth-chk{display:flex;gap:8px;align-items:center;font-size:13px;margin:14px 0 4px;color:#fff}
+.auth-l{display:block;font-size:11.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 5px}
+#authRoot .auth-l{color:#C9DCE8}
+.auth-chk{display:flex;gap:8px;align-items:center;font-size:13px;margin:14px 0 4px;color:var(--ink)}
+#authRoot .auth-chk{color:#fff}
 .auth-btn{justify-content:center;width:100%;margin-top:16px;padding:11px 14px;font-size:14px;background:#fff!important;color:#004D77!important;border-color:#fff!important}
 .auth-msg{font-size:12.5px;color:#fff;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.4);border-radius:8px;padding:8px 10px;margin:10px 0}
 .fld{display:block;width:100%;padding:9px 10px;border:1.5px solid var(--border-strong);border-radius:8px;font:inherit;font-size:14px;background:#fff;color:var(--ink)}
@@ -298,6 +300,11 @@
 .cm{border-top:1px solid var(--border);padding:9px 0;font-size:13px}.cm-h{margin-bottom:3px}.cm-t{line-height:1.5}
 .cm-form textarea{resize:vertical}
 select.fld-sm{width:auto;min-width:140px}
+.grp{border:1px solid var(--border);border-radius:8px;margin-bottom:6px;background:#fff}
+.grp-h{display:flex;gap:10px;align-items:center;padding:8px 12px;cursor:pointer;font-size:13px;flex-wrap:wrap}
+.grp-h:hover{background:var(--brand-tint)}.grp-ar{width:12px;color:var(--muted)}.grp-d{font-weight:600;min-width:84px}.grp-s{color:var(--muted);font-size:12.5px}
+.grp-det{padding:4px 12px 10px 34px;border-top:1px solid var(--border);font-size:12.5px}.grp-line{padding:2px 0}
+.rs-m{border-top:1px solid var(--border);padding:8px 0}.rs-m summary{cursor:pointer;font-size:13.5px}
 </style>
 
 <div class="side-deco left">
@@ -342,6 +349,7 @@ select.fld-sm{width:auto;min-width:140px}
     <span class="sync-chip" id="syncChip"></span>
     <span class="user-chip" id="userChip"></span>
     <button class="tb-btn" id="viewBtn" style="display:none" onclick="toggleView()"></button>
+    <button class="tb-btn" onclick="openPwModal()">Пароль</button>
     <button class="tb-btn" onclick="logoutUser()">Выйти</button>
     <span class="month-pill" id="monthPill"></span>
   </div>
@@ -2632,7 +2640,7 @@ function render(){
     { key: "archive", label: "Архив" },
     { key: "drops", label: "Дроп-офф" },
   ];
-  if (typeof ONLINE!=="undefined" && ONLINE.isAdmin) tabsDef.push({ key: "admin", label: "Админ" });
+  if (typeof ONLINE!=="undefined" && ONLINE.isAdmin) tabsDef.push({ key: "admin", label: "Админ" }); else if (typeof ONLINE!=="undefined" && ONLINE.me && ONLINE.me.dept==="manager") tabsDef.push({ key: "admin", label: "Комментарии" });
   document.getElementById("tabs").innerHTML = tabsDef.map(t=>
     '<div class="tab '+(state.tab===t.key?"active":"")+'" onclick="setTab(\''+t.key+'\')">'+t.label+'</div>'
   ).join("");
@@ -2720,7 +2728,7 @@ const DEFAULT_PERMS = {
   rail:["routes"],
 };
 const IMP_FIELDS = ["imp20","imp40","impF20","impF40"];
-const META_EXCL = new Set(["tab","forecastView","inputs","routes","plan","fact","distributionShares","capacitySelection","capacityTeu","planningHorizon","forecastLog","forecastInflow","archive"]);
+const META_EXCL = new Set(["reasons","tab","forecastView","inputs","routes","plan","fact","distributionShares","capacitySelection","capacityTeu","planningHorizon","forecastLog","forecastInflow","archive"]);
 
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function clone(o){ return JSON.parse(JSON.stringify(o)); }
@@ -2744,6 +2752,7 @@ function docsFromState(){
     const p = {}, f = {};
     LOCATIONS.forEach(l=>{ p[l.id] = state.plan[l.id][dir.key]; f[l.id] = state.fact[l.id][dir.key]; });
     d["plan_"+dir.key] = p; d["fact_"+dir.key] = f;
+    d["reasons_"+dir.key] = (state.reasons && state.reasons[dir.key]) || {};
   });
   d.shares = state.distributionShares;
   d.trainsCfg = { capacitySelection: state.capacitySelection, capacityTeu: state.capacityTeu, planningHorizon: state.planningHorizon };
@@ -2769,6 +2778,7 @@ function applyDocs(map){
       if (p && p[l.id]) state.plan[l.id][dir.key] = clone(p[l.id]);
       if (f && f[l.id]) state.fact[l.id][dir.key] = clone(f[l.id]);
     });
+    if (map["reasons_"+dir.key]) { state.reasons = state.reasons || {}; state.reasons[dir.key] = clone(map["reasons_"+dir.key]); }
   });
   if (map.shares) state.distributionShares = clone(map.shares);
   if (map.trainsCfg) { ["capacitySelection","capacityTeu","planningHorizon"].forEach(k=>{ if(map.trainsCfg[k]) state[k]=clone(map.trainsCfg[k]); }); }
@@ -2789,6 +2799,7 @@ function canWriteArea(a){
   if (!ONLINE.me) return false;
   if (ONLINE.isAdmin) return true;
   if (a==="archive" || a==="meta") return false;
+  if (a.indexOf("reasons_")===0) return a === "reasons_"+ONLINE.me.dept;
   if (!permsFor(ONLINE.me.dept).includes(a)) return false;
   try { if (ONLINE.server && AREA_TO_KIND[a] && deadlineLockedClient(AREA_TO_KIND[a])) return false; } catch(e){}
   return true;
@@ -2796,6 +2807,7 @@ function canWriteArea(a){
 function areaLabel(id){
   if (/^a\d{3}$/.test(id)) return "Архив";
   if (id==="meta") return "Месяц";
+  if (/^reasons_/.test(id)) { const d = DIRECTIONS.find(x=>"reasons_"+x.key===id); return "Причины невыполнения — "+(d?d.label:id); }
   const a = AREAS.find(x=>x.id===id); return a ? a.label : id;
 }
 
@@ -3013,7 +3025,7 @@ function enterApp(id, u, remember){
   try { window.evacVp && window.evacVp(true); } catch(e){}
   if (ONLINE.server && !ONLINE.unsubLog) { ONLINE.unsubLog = ()=>{}; refreshServerLog(); }
   else if (ONLINE.isAdmin && !ONLINE.unsubLog) { ONLINE.unsubLog = ONLINE.db.collection("log").onSnapshot(onLogSnap, ()=>{}); }
-  if (!ONLINE.isAdmin && state.tab==="admin") state.tab = "dashboard";
+  if (!ONLINE.isAdmin && ONLINE.me.dept!=="manager" && state.tab==="admin") state.tab = "dashboard";
   ONLINE.myLog = ((ONLINE.logs.length ? [] : [])).slice();
   loadMyLog();
   setUserChip(); render();
@@ -3126,9 +3138,9 @@ function renderAdminTab(){
     '<div class="panel"><p class="panel-title">Права департаментов</p>'+
       expl('Что каждый департамент может вносить. Всё остальное он только видит.','Отметка в клетке даёт право менять эту часть данных. Администратор (вы) меняет всё, включая закрытие месяца и редактирование прошлых месяцев, их нельзя выдать никому.')+
       '<div style="overflow-x:auto"><table><thead><tr><th>Что вносится</th>'+head+'</tr></thead><tbody>'+prow+'</tbody></table></div></div>'+
-    '<div class="panel"><p class="panel-title">Журнал изменений</p>'+
+    (ONLINE.server && typeof groupedLogHtml==="function" ? groupedLogHtml() + historyHtml() : '<div class="panel"><p class="panel-title">Журнал изменений</p>'+
       expl('Кто и когда менял данные.','Показаны последние записи. Одна запись означает сохранённую серию правок в одной части данных.')+
-      '<div style="overflow-x:auto"><table><thead><tr><th>Когда</th><th>Кто</th><th>Департамент</th><th>Что менялось</th></tr></thead><tbody>'+lrows+'</tbody></table></div></div>'+
+      '<div style="overflow-x:auto"><table><thead><tr><th>Когда</th><th>Кто</th><th>Департамент</th><th>Что менялось</th></tr></thead><tbody>'+lrows+'</tbody></table></div></div>')+
     '<div class="panel"><p class="panel-title">Резервная копия</p>'+
       expl('Скачайте копию всех данных или загрузите данные из старого файла инструмента.','Для переноса данных из прежнего файла в нём нажмите «Экспорт», затем здесь выберите полученный файл JSON.')+
       imp+'<div class="adm-actions"><button class="btn" onclick="adminDownload()">Скачать копию (JSON)</button> '+
@@ -3234,7 +3246,7 @@ async function serverStart(){
     es.addEventListener("app", ev=>{ const m = JSON.parse(ev.data); if (m.data) srvCache.app[m.id] = m.data; else delete srvCache.app[m.id]; deliverApp(); });
     es.addEventListener("users", async ()=>{ try { const r = await api("GET","/api/users"); srvCache.users = r.users||{}; deliverUsers(); } catch(e){} });
     es.addEventListener("perms", async ()=>{ try { const r = await api("GET","/api/perms"); srvCache.perms = r.map; onPermsSnap({ exists: !!r.map, data:()=>({ map: r.map }) }); } catch(e){} });
-    es.addEventListener("log", ()=>{ if (ONLINE.me) refreshServerLog(); });
+    es.addEventListener("log", ()=>{ if (ONLINE.me) refreshServerLog(); if (ONLINE.isAdmin && state.tab==="admin" && typeof loadHistory==="function") loadHistory(); });
     es.addEventListener("ext", ()=>{ if (typeof loadExt==="function" && ONLINE.me) loadExt(); });
     es.addEventListener("reload", ()=>{ location.reload(); });
     es.onerror = ()=>{ /* браузер переподключится сам */ };
@@ -3291,14 +3303,15 @@ const MANAGER = { key:"manager", label:"Руководитель (просмот
 const STATUS_DEFS = [
   { dept:"vnutriros", label:"Внутрироссийский", kinds:[["plan","План"],["fact","Факт"]] },
   { dept:"export",    label:"Экспортный",       kinds:[["plan","План"],["fact","Факт"]] },
+  { dept:"expl",      label:"Эксплуатация",     kinds:[["plan","План"]] },
   { dept:"import",    label:"Импорт",           kinds:[["import","Сдача импорта"]] },
-  { dept:"rail",      label:"ЖД отдел",         kinds:[["rail","Поезда и доли"]] },
+  { dept:"rail",      label:"ЖД отдел",         kinds:[["rail","Поезда: ТЕУ, план, доли"],["railfact","Поезда: факт"]] },
 ];
 const KIND_TITLE = { plan:"план", fact:"факт", import:"сдача импорта", rail:"поезда" };
-const AREA_TO_KIND = { plan_vnutriros:"plan", plan_export:"plan", fact_vnutriros:"fact", fact_export:"fact", import:"import", routes:"rail" };
+const AREA_TO_KIND_UNUSED = null; const AREA_TO_KIND = { plan_vnutriros:"plan", plan_export:"plan", fact_vnutriros:"fact", fact_export:"fact", import:"import", routes:"rail" };
 
 function fmtDM(d){ const m = String(d||"").match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? m[3]+"."+m[2] : ""; }
-function deadlineOf(kind){ return (ONLINE.ext.deadlines||{})[kind] || ""; }
+function deadlineOf(kind){ return (ONLINE.ext.deadlines||{})[kind==="railfact"?"rail":kind] || ""; }
 function deadlineLockedClient(kind){ const d = deadlineOf(kind); return !!d && Date.now() > Date.parse(d+"T23:59:59+03:00"); }
 function daysLeft(d){ return Math.floor((Date.parse(d+"T23:59:59+03:00") - Date.now()) / 86400000); }
 function statusOf(dept, kind){ const s = (ONLINE.ext.status||{}); return (s[dept] && s[dept][kind]) || null; }
@@ -3323,7 +3336,7 @@ function statusPanelHtml(){
   const me = ONLINE.me, isAdm = ONLINE.isAdmin;
   let total = 0, done = 0;
   const cards = STATUS_DEFS.map(df=>{
-    const mine = isAdm || (me && me.dept === df.dept);
+    const mine = df.dept==="expl" ? isAdm : (isAdm || (me && me.dept === df.dept));
     const rows = df.kinds.map(([k,lb],ix)=>{
       total++;
       const st = statusOf(df.dept,k), d = deadlineOf(k), locked = deadlineLockedClient(k);
@@ -3336,7 +3349,7 @@ function statusPanelHtml(){
       let btn = "";
       if (mine) btn = ready
         ? '<button class="btn" onclick="statusSet(\''+df.dept+'\',\''+k+'\',false)">Снять</button>'
-        : '<button class="btn btn-primary" onclick="statusSet(\''+df.dept+'\',\''+k+'\',true)">'+(isAdm && me.dept!==df.dept ? 'Подтвердить за отдел' : 'Готово')+'</button>';
+        : '<button class="btn btn-primary" onclick="statusSet(\''+df.dept+'\',\''+k+'\',true)">'+(isAdm && me.dept!==df.dept && df.dept!=="expl" ? 'Подтвердить за отдел' : 'Готово')+'</button>';
       return '<div class="st-row"><div><div class="st-k">'+lb+'</div>'+chip+dl+'</div><div>'+btn+'</div></div>';
     }).join("");
     return '<div class="st-card"><div class="st-h">'+df.label+'</div>'+rows+'</div>';
@@ -3391,6 +3404,7 @@ function signalsHtml(){
   }
   const rt = routesTotals(state.routes);
   if (rt.plan>0 && rt.fact>0 && rt.fact/rt.plan<0.8) sig.push({ lvl:1, text:"Поезда: отправлено "+Math.round(rt.fact/rt.plan*100)+"% от плана ("+fmt(rt.fact)+" из "+fmt(rt.plan)+")" });
+  { const nr = reasonsMissing(); if (nr) sig.push({ lvl:0, text:"Не указаны причины невыполнения плана: "+nr }); }
   sig.sort((a,b)=>b.lvl-a.lvl);
   const cls = ["sig-info","sig-warn","sig-bad"], ico = ["i","!","!"];
   const body = sig.length ? sig.slice(0,12).map(s=>'<div class="sig '+cls[s.lvl]+'"><span class="sig-i">'+ico[s.lvl]+'</span><span>'+esc(s.text)+'</span></div>').join("")
@@ -3444,21 +3458,34 @@ function feedHtml(){
 
 // ---------- отчёты: Excel и PDF ----------
 function pctCell(a,b){ return b>0 ? { v:a/b, p:true } : "—"; }
-function reportData(){
-  const label = MONTH_NAMES[state.monthCursor%12]+" "+(state.currentYear||""), t = totalsFull();
+function reportMonths(){
+  const list = [{ id:"cur", label:MONTH_NAMES[state.monthCursor%12]+" "+(state.currentYear||"")+" (текущий)" }];
+  (state.archive||[]).forEach((a,i)=>{ if (a.inputs && a.plan && a.fact) list.push({ id:String(i), label:a.label+" "+(a.year||"") }); });
+  return list.slice(0,1).concat(list.slice(1).reverse());
+}
+function reportData(sel){
+  const isCur = (sel===undefined || sel==="cur" || sel==null);
+  let inputs, plan, fact, label, rt;
+  if (isCur) { inputs = state.inputs; plan = state.plan; fact = state.fact; label = MONTH_NAMES[state.monthCursor%12]+" "+(state.currentYear||""); rt = routesTotals(state.routes); }
+  else {
+    const a = state.archive[parseInt(sel,10)]; if (!a) throw new Error("Месяц не найден");
+    inputs = a.inputs; plan = a.plan; fact = a.fact; label = a.label+" "+(a.year||"");
+    rt = a.routes ? routesTotals(a.routes) : { plan:a.routesPlan||0, fact:a.routesFact||0 };
+  }
+  const t = totalsFullCtx(inputs, plan, fact);
   const sh = [];
   const sum = [["Отчёт за месяц", label], ["Объём к эвакуации, шт", t.totalVolume], ["План, шт", t.totalPlan], ["Факт, шт", t.totalFact], ["% выполнения", pctCell(t.totalFact,t.totalPlan)], [""]];
   sum.push([{v:"Департамент",b:1},{v:"План, шт",b:1},{v:"Факт, шт",b:1},{v:"% выполнения",b:1}]);
   DIRECTIONS.forEach(d=>sum.push([d.label, t.planByDir[d.key], t.factByDir[d.key], pctCell(t.factByDir[d.key], t.planByDir[d.key])]));
-  const rt = routesTotals(state.routes); sum.push([""]); sum.push(["Поезда: план / факт, шт", rt.plan, rt.fact, pctCell(rt.fact, rt.plan)]);
+  sum.push([""]); sum.push(["Поезда: план / факт, шт", rt.plan, rt.fact, pctCell(rt.fact, rt.plan)]);
   sh.push({ name:"Итоги", rows:sum, widths:[34,16,16,16] });
   const hd = [{v:"Локация",b:1},{v:"Ресурс 20'",b:1},{v:"Ресурс 40'",b:1},{v:"Норма 20'",b:1},{v:"Норма 40'",b:1},{v:"Излишек 20'",b:1},{v:"Излишек 40'",b:1}];
   DIRECTIONS.forEach(d=>{ hd.push({v:"План "+d.label,b:1}); hd.push({v:"Факт "+d.label,b:1}); });
   hd.push({v:"План всего",b:1}, {v:"Факт всего",b:1}, {v:"% выполнения",b:1});
   const lr = [hd];
   LOCATIONS.forEach(l=>{
-    const i = state.inputs[l.id]; let pT=0, fT=0; const r = [l.name, effRes(i,"c20"), effRes(i,"c40"), i.norm20||0, i.norm40||0, volume20For(l.id), volume40For(l.id)];
-    DIRECTIONS.forEach(d=>{ const p = finalPlanFor(l.id,d.key), f = factCountFor(l.id,d.key); pT+=p; fT+=f; r.push(p, f); });
+    const i = inputs[l.id]; let pT=0, fT=0; const r = [l.name, effRes(i,"c20"), effRes(i,"c40"), i.norm20||0, i.norm40||0, volume20ForCtx(inputs,l.id), volume40ForCtx(inputs,l.id)];
+    DIRECTIONS.forEach(d=>{ const p = finalPlanForCtx(inputs,plan,l.id,d.key), f = factCountForCtx(fact,l.id,d.key); pT+=p; fT+=f; r.push(p, f); });
     r.push(pT, fT, pctCell(fT,pT)); lr.push(r);
   });
   sh.push({ name:"Локации", rows:lr, widths:[20,12,12,12,12,12,12].concat(DIRECTIONS.flatMap(()=>[16,16]), [14,14,14]) });
@@ -3471,7 +3498,9 @@ function reportData(){
     ar.push(r);
   });
   sh.push({ name:"Архив", rows:ar, widths:[14,8,12,12,12,14].concat(DIRECTIONS.flatMap(()=>[16,16,12])) });
-  const cm = (ONLINE.ext.comments||[]).slice(0,30);
+  { const rs = reasonRowsCtx(inputs, plan, fact, isCur ? state.reasons : (state.archive[parseInt(sel,10)]||{}).reasons);
+    if (rs.length) sh.push({ name:"Причины невыполнения", rows:[[{v:"Департамент",b:1},{v:"Локация",b:1},{v:"План, шт",b:1},{v:"Факт, шт",b:1},{v:"Недовывоз, шт",b:1},{v:"Причина",b:1}]].concat(rs.map(r=>[r.dept, r.loc, r.plan, r.fact, r.gap, r.reason||"—"])), widths:[20,20,12,12,14,70] }); }
+  const cm = isCur ? (ONLINE.ext.comments||[]).slice(0,30) : [];
   if (cm.length) sh.push({ name:"Комментарии", rows:[[{v:"Когда",b:1},{v:"Кто",b:1},{v:"Локация",b:1},{v:"Текст",b:1}]].concat(cm.map(c=>{ const l = LOCATIONS.find(x=>x.id===c.loc); return [fmtTime(c.t), c.n, l?l.name:"Общий", c.text]; })), widths:[18,20,16,80] });
   return { title:"Эвакуация КТК — "+label, label, sheets:sh };
 }
@@ -3494,7 +3523,11 @@ function zipStore(files, mime){
 }
 function buildXlsx(rep){
   const enc = new TextEncoder(), F = (name, text)=>({ name, data: enc.encode(text) });
-  const sheetsXml = rep.sheets.map(sh=>{
+  const imgs = rep.images || [];
+  const sheets = rep.sheets.slice(); if (imgs.length) sheets.push({ name:"Графики", rows:[], drawing:true });
+  const REL = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+  const sheetsXml = sheets.map(sh=>{
+    if (sh.drawing) return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '+REL+'><sheetData/><drawing r:id="rId1"/></worksheet>';
     const cols = '<cols>'+(sh.widths||[]).map((w,i)=>'<col min="'+(i+1)+'" max="'+(i+1)+'" width="'+w+'" customWidth="1"/>').join("")+'</cols>';
     const rows = sh.rows.map((r,ri)=>'<row r="'+(ri+1)+'">'+r.map((c,ci)=>{
       const ref = colName(ci)+(ri+1), o = (c && typeof c==="object") ? c : { v:c }, v = o.v;
@@ -3505,33 +3538,49 @@ function buildXlsx(rep){
     return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+(sh.widths?cols:"")+'<sheetData>'+rows+'</sheetData></worksheet>';
   });
   const files = [
-    F("[Content_Types].xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+rep.sheets.map((s,i)=>'<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join("")+'</Types>'),
+    F("[Content_Types].xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'+(imgs.length?'<Default Extension="png" ContentType="image/png"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>':'')+'<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+sheets.map((s,i)=>'<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join("")+'</Types>'),
     F("_rels/.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'),
-    F("xl/workbook.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'+rep.sheets.map((s,i)=>'<sheet name="'+xmlEsc(s.name)+'" sheetId="'+(i+1)+'" r:id="rId'+(i+1)+'"/>').join("")+'</sheets></workbook>'),
-    F("xl/_rels/workbook.xml.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+rep.sheets.map((s,i)=>'<Relationship Id="rId'+(i+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet'+(i+1)+'.xml"/>').join("")+'<Relationship Id="rId'+(rep.sheets.length+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'),
+    F("xl/workbook.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '+REL+'><sheets>'+sheets.map((s,i)=>'<sheet name="'+xmlEsc(s.name)+'" sheetId="'+(i+1)+'" r:id="rId'+(i+1)+'"/>').join("")+'</sheets></workbook>'),
+    F("xl/_rels/workbook.xml.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+sheets.map((s,i)=>'<Relationship Id="rId'+(i+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet'+(i+1)+'.xml"/>').join("")+'<Relationship Id="rId'+(sheets.length+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'),
     F("xl/styles.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEBF2F7"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="3" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'),
   ];
   sheetsXml.forEach((x,i)=>files.push(F("xl/worksheets/sheet"+(i+1)+".xml", x)));
+  if (imgs.length) {
+    const XDR = 'xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '+REL;
+    let row = 1, anchors = "", drels = "";
+    imgs.forEach((im,k)=>{
+      const cx = Math.round(im.w*9525), cy = Math.round(im.h*9525);
+      anchors += '<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>'+row+'</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="'+cx+'" cy="'+cy+'"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="'+(k+2)+'" name="График '+(k+1)+'"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId'+(k+1)+'"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="'+cx+'" cy="'+cy+'"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>';
+      drels += '<Relationship Id="rId'+(k+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image'+(k+1)+'.png"/>';
+      row += Math.ceil(im.h/20) + 2;
+      files.push({ name:"xl/media/image"+(k+1)+".png", data:im.data });
+    });
+    files.push(F("xl/drawings/drawing1.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr '+XDR+'>'+anchors+'</xdr:wsDr>'));
+    files.push(F("xl/drawings/_rels/drawing1.xml.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+drels+'</Relationships>'));
+    files.push(F("xl/worksheets/_rels/sheet"+sheets.length+".xml.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>'));
+  }
   return zipStore(files, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 function reportStamp(){ const d = new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
-function reportExcel(){
-  try {
-    const blob = buildXlsx(reportData()), a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = "evac-report-"+reportStamp()+".xlsx"; document.body.appendChild(a); a.click();
-    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 2000);
-  } catch(e){ mainToast("Не получилось собрать Excel: "+((e&&e.message)||e)); }
+function downloadBlob(blob, name){
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 2000);
 }
-function cellText(c){ const o = (c && typeof c==="object") ? c : { v:c }; if (typeof o.v==="number") return o.p ? Math.round(o.v*100)+"%" : fmt(o.v); return esc(o.v==null?"":o.v); }
-function reportPdf(){
-  const rep = reportData();
-  const tables = rep.sheets.map(sh=>'<h2>'+esc(sh.name)+'</h2><table>'+sh.rows.map((r,ri)=>'<tr>'+r.map(c=>{ const o = (c && typeof c==="object") ? c : {}; const tag = o.b ? "th" : "td"; return '<'+tag+(typeof (o.v!==undefined?o.v:c)==="number"?' class="n"':'')+'>'+cellText(c)+'</'+tag+'>'; }).join("")+'</tr>').join("")+'</table>').join("");
-  const html = '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>'+esc(rep.title)+'</title><style>body{font-family:Arial,sans-serif;color:#0E1B24;margin:18px;font-size:11px}h1{font-size:18px;color:#004D77;margin:0 0 4px}h2{font-size:13px;margin:16px 0 6px;color:#004D77}.sub{color:#667889;margin-bottom:8px}table{border-collapse:collapse;width:100%;margin-bottom:6px}td,th{border:1px solid #C9D5DF;padding:3px 6px;text-align:left;vertical-align:top}th{background:#EBF2F7}td.n{text-align:right}@page{size:A4 landscape;margin:10mm}</style></head><body><h1>'+esc(rep.title)+'</h1><div class="sub">Сформировано '+esc(new Date().toLocaleString("ru-RU"))+'</div>'+tables+'</body></html>';
+function reportExcel(sel){
+  try { const rep = reportData(sel); downloadBlob(buildXlsx(rep), "evac-report-"+rep.label.replace(/\s+/g,"-")+(sel===undefined||sel==="cur"?"-"+reportStamp():"")+".xlsx"); }
+  catch(e){ mainToast("Не получилось собрать Excel: "+((e&&e.message)||e)); }
+}
+function cellText(c){ const o = (c && typeof c==="object") ? c : { v:c }; if (typeof o.v==="number") return o.p ? Math.round(o.v*100)+"%" : fmt(Math.round(o.v*100)/100); return esc(o.v==null?"":o.v); }
+function printReport(rep){
+  const tables = rep.sheets.map(sh=>'<h2>'+esc(sh.name)+'</h2><table>'+sh.rows.map(r=>'<tr>'+r.map(c=>{ const o = (c && typeof c==="object") ? c : {}; const tag = o.b ? "th" : "td"; return '<'+tag+(typeof (o.v!==undefined?o.v:c)==="number"?' class="n"':'')+'>'+cellText(c)+'</'+tag+'>'; }).join("")+'</tr>').join("")+'</table>').join("");
+  const charts = (rep.charts||[]).length ? '<h2>Графики</h2>'+rep.charts.map(c=>'<div class="ch">'+c.svg+'</div>').join("") : "";
+  const html = '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>'+esc(rep.title)+'</title><style>body{font-family:Arial,sans-serif;color:#0E1B24;margin:18px;font-size:11px}h1{font-size:18px;color:#004D77;margin:0 0 4px}h2{font-size:13px;margin:16px 0 6px;color:#004D77}.sub{color:#667889;margin-bottom:8px}table{border-collapse:collapse;width:100%;margin-bottom:6px}td,th{border:1px solid #C9D5DF;padding:3px 6px;text-align:left;vertical-align:top}th{background:#EBF2F7}td.n{text-align:right}.ch{page-break-inside:avoid;margin:8px 0 14px;max-width:760px}@page{size:A4 landscape;margin:10mm}</style></head><body><h1>'+esc(rep.title)+'</h1><div class="sub">Сформировано '+esc(new Date().toLocaleString("ru-RU"))+'</div>'+charts+tables+'</body></html>';
   const fr = document.createElement("iframe"); fr.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
   document.body.appendChild(fr);
   const doc = fr.contentWindow.document; doc.open(); doc.write(html); doc.close();
-  setTimeout(()=>{ try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch(e){ mainToast("Печать недоступна в этом браузере"); } setTimeout(()=>fr.remove(), 60000); }, 300);
+  setTimeout(()=>{ try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch(e){ mainToast("Печать недоступна в этом браузере"); } setTimeout(()=>fr.remove(), 60000); }, 400);
 }
+function reportPdf(sel){ try { printReport(reportData(sel)); } catch(e){ mainToast("Не получилось собрать отчёт: "+((e&&e.message)||e)); } }
 function reportPanelHtml(){
   return '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div><p class="panel-title" style="margin-bottom:2px">Отчёт за месяц</p><p class="panel-sub" style="margin:0">Итоги, локации, архив и комментарии руководителя.</p></div>'+
     '<div class="adm-actions"><button class="btn btn-primary" onclick="reportExcel()">Скачать Excel</button><button class="btn" onclick="reportPdf()">PDF (печать)</button></div></div>'+
@@ -3543,16 +3592,22 @@ const _renderDashboardTab = renderDashboardTab;
 renderDashboardTab = function(ctx){
   const base = _renderDashboardTab(ctx);
   if (ctx || !srvOn()) return base;
-  return statusPanelHtml() + signalsHtml() + base + compareHtml() + commentsHtml() + feedHtml() + reportPanelHtml();
+  return statusPanelHtml() + signalsHtml() + base + reasonsHtml() + reportPanelHtml();
 };
 const _closeMonth = closeMonth;
 closeMonth = function(){
-  if (srvOn()) {
-    const miss = []; STATUS_DEFS.forEach(df=>df.kinds.forEach(([k,lb])=>{ if (!isReady(df.dept,k)) miss.push(df.label+" — "+lb.toLowerCase()); }));
-    const q = miss.length ? "Не подтвердили:\n• "+miss.join("\n• ")+"\n\nВсё равно закрыть месяц?" : "Закрыть месяц? Данные уйдут в архив, поля для заполнения обнулятся.";
-    if (!confirm(q)) return;
-  }
-  return _closeMonth();
+  if (!srvOn()) return _closeMonth();
+  const miss = []; STATUS_DEFS.forEach(df=>df.kinds.forEach(([k,lb])=>{ if (!isReady(df.dept,k)) miss.push(df.label+" — "+lb.toLowerCase()); }));
+  const nr = reasonsMissing();
+  let q = miss.length ? "Не подтвердили:\n• "+miss.join("\n• ")+"\n\n" : "";
+  if (nr) q += "Не указаны причины невыполнения плана: "+nr+".\n\n";
+  q += q ? "Всё равно закрыть месяц?" : "Закрыть месяц? Данные уйдут в архив, поля для заполнения обнулятся.";
+  if (!confirm(q)) return;
+  const rs = clone(state.reasons || {}), n0 = state.archive.length;
+  _closeMonth();
+  if (state.archive.length > n0) { state.archive[state.archive.length-1].reasons = rs; }
+  state.reasons = {};
+  saveAndRender();
 };
 
 // ---------- администратор: e-mail, почта, копии ----------
@@ -3564,17 +3619,19 @@ async function loadAdminExtras(){
     if (state.tab==="admin") scheduleRender();
   } catch(e){}
 }
-async function mailSave(){
+async function mailSave(quiet){
   const g = id=>document.getElementById(id), body = {
     enabled:g("mc_enabled").checked, host:g("mc_host").value, port:g("mc_port").value, mode:g("mc_mode").value, user:g("mc_user").value, from:g("mc_from").value, siteUrl:g("mc_site").value,
     evReady:g("mc_evReady").checked, evAll:g("mc_evAll").checked, evClosed:g("mc_evClosed").checked, evRemind:g("mc_evRemind").checked };
   if (g("mc_pass").value) body.pass = g("mc_pass").value;
-  try { await api("PUT","/api/mail",body); adminMsg("Настройки почты сохранены."); loadAdminExtras(); } catch(e){ adminMsg("Не удалось сохранить: "+((e&&e.message)||e)); }
+  try { await api("PUT","/api/mail",body); if (!quiet) { ONLINE.mailMsg = { ok:true, text:"Настройки почты сохранены." }; await loadAdminExtras(); render(); } } catch(e){ ONLINE.mailMsg = { ok:false, text:"Не удалось сохранить: "+((e&&e.message)||e) }; if (quiet) throw e; render(); }
 }
 async function mailTest(){
   const to = document.getElementById("mc_test").value.trim();
-  try { await mailSave(); await api("POST","/api/mail/test",{ to }); adminMsg("Тестовое письмо отправлено на "+to+"."); } catch(e){ adminMsg("Проверка не прошла: "+((e&&e.message)||e)); }
-  loadAdminExtras();
+  ONLINE.mailMsg = { ok:true, text:"Отправляю тестовое письмо…" }; render();
+  try { await mailSave(true); await api("POST","/api/mail/test",{ to }); ONLINE.mailMsg = { ok:true, text:"Тестовое письмо отправлено на "+to+". Проверьте почту, а также папку «Спам»." }; }
+  catch(e){ ONLINE.mailMsg = { ok:false, text:"Не получилось: "+((e&&e.message)||e) }; }
+  await loadAdminExtras(); render();
 }
 async function emailSave(id){
   const v = document.getElementById("em_"+id).value.trim();
@@ -3584,6 +3641,13 @@ async function backupNow(){ try { const r = await api("POST","/api/backups"); ad
 async function backupRestore(name){
   if (!confirm("Восстановить данные из копии "+name+"?\nТекущие данные будут заменены. Перед этим автоматически сохранится ещё одна копия (pre-restore).")) return;
   try { await api("POST","/api/backups/"+name+"/restore"); } catch(e){ adminMsg("Не удалось восстановить: "+((e&&e.message)||e)); }
+}
+function reportsAdminHtml(){
+  const opts = reportMonths().map(m=>'<option value="'+m.id+'"'+(String(ONLINE.rpSel||"cur")===m.id?' selected':'')+'>'+esc(m.label)+'</option>').join("");
+  return '<div class="panel"><p class="panel-title">Отчёт за любой месяц</p>'+expl('выберите месяц (текущий или любой закрытый) и скачайте отчёт.','Excel: итоги, локации, архив. PDF откроет окно печати, выберите «Сохранить как PDF». Для закрытых месяцев берутся данные, сохранённые в архиве.')+
+    '<div class="adm-actions"><select class="fld fld-sm" id="rp_month" onchange="ONLINE.rpSel=this.value">'+opts+'</select>'+
+    '<button class="btn btn-primary" onclick="reportExcel(document.getElementById(\'rp_month\').value)">Скачать Excel</button>'+
+    '<button class="btn" onclick="reportPdf(document.getElementById(\'rp_month\').value)">PDF (печать)</button></div></div>';
 }
 function adminExtraHtml(){
   if (!srvOn()) return "";
@@ -3607,11 +3671,11 @@ function adminExtraHtml(){
     '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evAll"'+chk("evAll")+'> Администратору: все отделы подтвердили данные</label>'+
     '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evClosed"'+chk("evClosed")+'> Всем: месяц закрыт</label>'+
     '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evRemind"'+chk("evRemind")+'> Отделам: напоминание за день до срока и в день срока (в 9:00 по Москве)</label></div>'+
-    '<div class="adm-actions"><button class="btn btn-primary" onclick="mailSave()">Сохранить</button> <input class="fld fld-sm" id="mc_test" type="email" placeholder="e-mail для проверки"> <button class="btn" onclick="mailTest()">Отправить тест</button></div>'+
+    (ONLINE.mailMsg ? '<div class="adm-warn" style="margin:0 0 10px;'+(ONLINE.mailMsg.ok?'':'background:#FBECEC;border-color:#E3A9AA')+'">'+esc(ONLINE.mailMsg.text)+'</div>' : '')+'<div class="adm-actions"><button class="btn btn-primary" onclick="mailSave()">Сохранить</button> <input class="fld fld-sm" id="mc_test" type="email" placeholder="e-mail для проверки"> <button class="btn" onclick="mailTest()">Отправить тест</button></div>'+
     ((ONLINE.mailLog||[]).length ? '<table style="margin-top:12px"><thead><tr><th>Когда</th><th>Кому</th><th>Тема</th><th>Результат</th></tr></thead><tbody>'+ONLINE.mailLog.slice(0,8).map(m=>'<tr><td>'+fmtTime(m.t)+'</td><td>'+esc(m.to)+'</td><td>'+esc(m.s)+'</td><td>'+(m.ok?'отправлено':'<span style="color:var(--danger)">'+esc(m.err||"ошибка")+'</span>')+'</td></tr>').join("")+'</tbody></table>' : '');
   const brows = (ONLINE.backups||[]).slice(0,20).map(b=>'<tr><td>'+fmtTime(b.t)+'</td><td class="mono">'+esc(b.name)+'</td><td>'+fmtSize(b.size)+'</td><td><a class="btn" href="/api/backups/'+encodeURIComponent(b.name)+'" download>Скачать</a> <button class="btn btn-danger" onclick="backupRestore(\''+b.name+'\')">Восстановить</button></td></tr>').join("")
     || '<tr><td colspan="4" class="muted">Копий пока нет, первая появится в течение 10 минут.</td></tr>';
-  return '<div class="panel"><p class="panel-title">Почта и уведомления</p>'+expl('сюда вводится почтовый ящик, с которого сервер отправляет письма. Ящик для робота лучше завести отдельный.','Узнайте у айтишников адрес SMTP-сервера и пароль приложения. Примеры: Яндекс smtp.yandex.ru, порт 465, SSL; Mail.ru smtp.mail.ru, порт 465, SSL. Пароль хранится на сервере и обратно в браузер не передаётся.')+mailForm+'</div>'+
+  return reportsAdminHtml()+periodPanelHtml()+'<div class="panel"><p class="panel-title">Почта и уведомления</p>'+expl('сюда вводится почтовый ящик, с которого сервер отправляет письма. Ящик для робота лучше завести отдельный.','Узнайте у айтишников адрес SMTP-сервера и пароль приложения. Примеры: Яндекс smtp.yandex.ru, порт 465, SSL; Mail.ru smtp.mail.ru, порт 465, SSL. Пароль хранится на сервере и обратно в браузер не передаётся.')+mailForm+'</div>'+
     '<div class="panel"><p class="panel-title">Адреса сотрудников для писем</p>'+expl('куда отправлять уведомления конкретному человеку.','У кого адрес не указан, письма не получает. Администратору нужен адрес, чтобы приходили сообщения «отдел готов».')+
     '<div style="overflow-x:auto"><table><thead><tr><th>Имя</th><th>Департамент</th><th>E-mail</th><th></th></tr></thead><tbody>'+erows+'</tbody></table></div></div>'+
     '<div class="panel"><p class="panel-title">Автоматические копии на сервере</p>'+expl('сервер сам сохраняет копию всех данных раз в сутки и хранит 30 последних.','«Восстановить» возвращает данные на момент копии. Пароли пользователей при этом не меняются. Перед восстановлением сервер сам делает ещё одну копию, поэтому ошибку можно отыграть назад.')+
@@ -3620,11 +3684,265 @@ function adminExtraHtml(){
 }
 const _renderAdminTab = renderAdminTab;
 renderAdminTab = function(){
+  if (srvOn() && ONLINE.me && ONLINE.me.dept==="manager") return commentsHtml();
   const base = _renderAdminTab();
   if (!base || !srvOn()) return base;
-  if (!ONLINE.admLoaded) { ONLINE.admLoaded = true; loadAdminExtras(); }
-  return base + adminExtraHtml();
+  if (!ONLINE.admLoaded) { ONLINE.admLoaded = true; loadAdminExtras(); loadHistory(); }
+  return commentsHtml() + base + adminExtraHtml();
 };
+
+// ======================================================================
+//  Причина невыполнения плана
+// ======================================================================
+function reasonRowsCtx(inputs, plan, fact, reasons){
+  const rows = [];
+  DIRECTIONS.forEach(d=>LOCATIONS.forEach(l=>{
+    const p = finalPlanForCtx(inputs, plan, l.id, d.key), f = factCountForCtx(fact, l.id, d.key);
+    if (p > 0 && f < p) rows.push({ dk:d.key, dept:d.label, color:d.color, lid:l.id, loc:l.name, plan:p, fact:f, gap:p-f, reason:(((reasons||{})[d.key])||{})[l.id]||"" });
+  }));
+  return rows.sort((a,b)=>b.gap-a.gap);
+}
+function reasonSet(dk, lid, val){
+  state.reasons = state.reasons || {}; state.reasons[dk] = state.reasons[dk] || {};
+  val = String(val||"").trim().slice(0,200);
+  if (val) state.reasons[dk][lid] = val; else delete state.reasons[dk][lid];
+  saveAndRender();
+}
+function reasonsMissing(){
+  const t = totalsFull(); if (!(t.totalFact > 0)) return 0;
+  return reasonRowsCtx(state.inputs, state.plan, state.fact, state.reasons).filter(r=>!r.reason).length;
+}
+function reasonsHtml(){
+  const t = totalsFull();
+  const rows = reasonRowsCtx(state.inputs, state.plan, state.fact, state.reasons);
+  if (!(t.totalFact > 0) || !rows.length) return "";
+  const miss = rows.filter(r=>!r.reason).length;
+  const body = rows.map(r=>{
+    const can = canWriteArea("reasons_"+r.dk);
+    return '<tr><td><span class="dot" style="background:'+r.color+';margin-right:6px"></span>'+esc(r.dept)+'</td><td>'+esc(r.loc)+'</td><td>'+fmt(r.plan)+'</td><td>'+fmt(r.fact)+'</td><td style="color:var(--danger);font-weight:600">−'+fmt(r.gap)+'</td>'+
+      '<td style="min-width:260px"><input class="fld" maxlength="200" value="'+esc(r.reason)+'" '+(can?'':'disabled ')+'placeholder="'+(can?'Почему не выполнен план…':'—')+'" onchange="reasonSet(\''+r.dk+'\',\''+r.lid+'\',this.value)"></td></tr>';
+  }).join("");
+  return '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap"><p class="panel-title" style="margin:0">Причина невыполнения плана</p><span class="mono muted" style="font-size:12.5px">без причины: '+miss+' из '+rows.length+'</span></div>'+
+    expl('где факт ниже плана и почему.','Свою причину пишет каждый департамент (администратор — за Эксплуатацию). Текст сохраняется после выхода из поля. Причины попадают в архив и в отчёты.')+
+    '<div style="overflow-x:auto"><table><thead><tr><th>Департамент</th><th>Локация</th><th>План</th><th>Факт</th><th>Недовывоз</th><th>Причина</th></tr></thead><tbody>'+body+'</tbody></table></div></div>';
+}
+function reasonsArchiveHtml(){
+  const items = (state.archive||[]).map((a,i)=>({a,i})).filter(x=>x.a.reasons && Object.keys(x.a.reasons).some(k=>Object.keys(x.a.reasons[k]||{}).length)).reverse();
+  if (!items.length) return "";
+  const blocks = items.map(({a})=>{
+    const rows = reasonRowsCtx(a.inputs||state.inputs, a.plan, a.fact, a.reasons).filter(r=>r.reason);
+    if (!rows.length) return "";
+    return '<details class="rs-m"><summary><b>'+esc(a.label)+' '+(a.year||"")+'</b> <span class="muted">· причин: '+rows.length+'</span></summary><table><thead><tr><th>Департамент</th><th>Локация</th><th>План</th><th>Факт</th><th>Причина</th></tr></thead><tbody>'+
+      rows.map(r=>'<tr><td>'+esc(r.dept)+'</td><td>'+esc(r.loc)+'</td><td>'+fmt(r.plan)+'</td><td>'+fmt(r.fact)+'</td><td>'+esc(r.reason)+'</td></tr>').join("")+'</tbody></table></details>';
+  }).join("");
+  return blocks ? '<div class="panel"><p class="panel-title">Причины невыполнения плана по месяцам</p>'+expl('что департаменты указали как причину недовывоза в закрытых месяцах.','Нажмите на месяц, чтобы раскрыть список.')+blocks+'</div>' : "";
+}
+const _renderArchiveTab = renderArchiveTab;
+renderArchiveTab = function(){ const base = _renderArchiveTab(); return srvOn() ? base + reasonsArchiveHtml() : base; };
+
+// ======================================================================
+//  Журнал с группировкой и история правок по ячейкам
+// ======================================================================
+ONLINE.logLimit = 25; ONLINE.logDept = ""; ONLINE.logDays = 30; ONLINE.hist = null; ONLINE.histLimit = 20; ONLINE.histUser = ""; ONLINE.histArea = ""; ONLINE.histDays = 30; ONLINE.openGroups = {};
+function safeKey(s){ try { return btoa(unescape(encodeURIComponent(s))).replace(/[^A-Za-z0-9]/g,""); } catch(x){ return String(s).replace(/[^A-Za-z0-9]/g,""); } }
+function dayKey(t){ const d = new Date(t); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function dayLabel(k){ const m = k.match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? m[3]+"."+m[2]+"."+m[1] : k; }
+function hhmm(t){ return new Date(t).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"}); }
+function groupToggle(key){ ONLINE.openGroups[key] = !ONLINE.openGroups[key]; render(); }
+function logFilter(k, v){ ONLINE[k] = (k==="logDays"||k==="histDays") ? parseInt(v,10) : v; ONLINE.logLimit = 25; ONLINE.histLimit = 20; render(); }
+function groupedLogHtml(){
+  const since = ONLINE.logDays ? Date.now() - ONLINE.logDays*86400000 : 0;
+  const all = (ONLINE.logs||[]).filter(e=>e.t >= since && (!ONLINE.logDept || e.d===ONLINE.logDept));
+  const groups = [], idx = {};
+  all.forEach(e=>{ const k = dayKey(e.t)+"|"+e.n+"|"+e.d; if (!(k in idx)) { idx[k] = groups.length; groups.push({ k, id:safeKey(k), day:dayKey(e.t), n:e.n, d:e.d, items:[] }); } groups[idx[k]].items.push(e); });
+  const shown = groups.slice(0, ONLINE.logLimit);
+  const body = shown.length ? shown.map(g=>{
+    const areas = [...new Set(g.items.flatMap(e=>e.a||[]))], first = g.items[g.items.length-1].t, last = g.items[0].t;
+    const sum = areas.slice(0,3).join(", ")+(areas.length>3?" и ещё "+(areas.length-3):"");
+    const open = !!ONLINE.openGroups["l"+g.id];
+    const det = open ? '<div class="grp-det">'+g.items.map(e=>'<div class="grp-line"><span class="mono muted">'+hhmm(e.t)+'</span> '+esc((e.a||[]).join(", "))+'</div>').join("")+'</div>' : "";
+    return '<div class="grp"><div class="grp-h" onclick="groupToggle(\'l'+g.id+'\')"><span class="grp-ar">'+(open?"▾":"▸")+'</span><span class="grp-d">'+dayLabel(g.day)+'</span><b>'+esc(g.n)+'</b><span class="muted">'+esc(deptLabel(g.d))+'</span><span class="grp-s">'+esc(sum)+'</span><span class="mono muted" style="margin-left:auto;white-space:nowrap">'+hhmm(first)+(first!==last?'–'+hhmm(last):'')+' · записей: '+g.items.length+'</span></div>'+det+'</div>';
+  }).join("") : '<div class="muted" style="font-size:13px">За выбранный период изменений нет.</div>';
+  const deptOpts = '<option value="">Все</option>'+["admin","vnutriros","export","import","rail","manager","viewer"].map(k=>'<option value="'+k+'"'+(ONLINE.logDept===k?' selected':'')+'>'+esc(deptLabel(k))+'</option>').join("");
+  const dayOpts = [[1,"Сегодня"],[7,"7 дней"],[30,"30 дней"],[0,"Всё"]].map(([v,l])=>'<option value="'+v+'"'+(ONLINE.logDays===v?' selected':'')+'>'+l+'</option>').join("");
+  return '<div class="panel"><p class="panel-title">Журнал изменений</p>'+expl('кто и когда вносил данные, сгруппировано по сотруднику и дню.','Нажмите на строку, чтобы раскрыть записи за день. Здесь показано, какие разделы менялись; конкретные ячейки — в «Истории правок» ниже.')+
+    '<div class="adm-actions" style="margin-bottom:10px"><select class="fld fld-sm" onchange="logFilter(\'logDept\',this.value)">'+deptOpts+'</select><select class="fld fld-sm" onchange="logFilter(\'logDays\',this.value)">'+dayOpts+'</select></div>'+body+
+    (groups.length > shown.length ? '<div style="margin-top:8px"><button class="btn" onclick="ONLINE.logLimit+=25;render()">Показать ещё ('+(groups.length-shown.length)+')</button></div>' : '')+'</div>';
+}
+async function loadHistory(){ try { const r = await api("GET","/api/history"); ONLINE.hist = r.rows||[]; if (state.tab==="admin") scheduleRender(); } catch(e){} }
+const CELL_FIELDS = { resource20:"Ресурс 20'", resource40:"Ресурс 40'", norm20:"Норма 20'", norm40:"Норма 40'", acc:"% сдачи", rep:"% ремонта", days:"Срок ремонта, дн", imp20:"Подход импорта, план 20'", imp40:"Подход импорта, план 40'", impF20:"Подход импорта, факт 20'", impF40:"Подход импорта, факт 40'",
+  plan:"план", fact:"факт", teuPerTrain:"ТЕУ в поезде", limited:"лимитирующее", share20:"доля 20'", share40:"доля 40'", c20:"20'", c40:"40'" };
+function locName(id){ const l = LOCATIONS.find(x=>x.id===id); return l ? l.name : id; }
+function docLabel(doc){
+  if (/^a\d{3}$/.test(doc)) return "Архив";
+  let m = doc.match(/^(plan|fact)_(\w+)$/); if (m) { const d = DIRECTIONS.find(x=>x.key===m[2]); return (m[1]==="plan"?"План":"Факт")+" — "+(d?d.label:m[2]); }
+  m = doc.match(/^reasons_(\w+)$/); if (m) { const d = DIRECTIONS.find(x=>x.key===m[1]); return "Причины — "+(d?d.label:m[1]); }
+  const a = AREAS.find(x=>x.id===doc); return a ? a.label : doc;
+}
+function describeCell(doc, p){
+  if (p === "*") return "массовое обновление раздела";
+  const parts = p.split("."); let m;
+  if ((m = doc.match(/^(plan|fact)_(\w+)$/))) { const d = DIRECTIONS.find(x=>x.key===m[2]); return (m[1]==="plan"?"План":"Факт")+" · "+(d?d.label:m[2])+" · "+locName(parts[0])+" · "+(CELL_FIELDS[parts[1]]||parts[1]); }
+  if (doc==="inputs" || doc==="import") return locName(parts[0])+" · "+(CELL_FIELDS[parts[1]]||parts[1]);
+  if (doc==="routes") { const r = ROUTES.find(x=>x.key===parts[0]); return "Поезда · "+(r?r.label:parts[0])+" · "+(CELL_FIELDS[parts[1]]||parts[1]); }
+  if (doc==="shares") { const d = DIRECTIONS.find(x=>x.key===parts[1]); return "Доля автодобора · "+locName(parts[0])+" · "+(d?d.label:parts[1]||""); }
+  if ((m = doc.match(/^reasons_(\w+)$/))) { const d = DIRECTIONS.find(x=>x.key===m[1]); return "Причина · "+(d?d.label:m[1])+" · "+locName(parts[0]); }
+  if (doc==="forecast") return "Прогноз · "+parts.slice(1).map(x=>locName(x)).map(x=>CELL_FIELDS[x]||x).join(" · ");
+  if (/^a\d{3}$/.test(doc)) return "Архив · "+p;
+  return doc+" · "+p;
+}
+function histVal(v){ if (v===null||v===undefined) return "—"; if (typeof v==="number") return fmt(Math.round(v*100)/100); if (v===true) return "да"; if (v===false) return "нет"; return esc(String(v).slice(0,80)); }
+function historyHtml(){
+  const rows = ONLINE.hist;
+  if (!rows) return '<div class="panel"><p class="panel-title">История правок по ячейкам</p><p class="muted">Загрузка…</p></div>';
+  const since = ONLINE.histDays ? Date.now() - ONLINE.histDays*86400000 : 0;
+  const names = [...new Set(rows.map(r=>r.n))].sort((a,b)=>a.localeCompare(b,"ru"));
+  const docs = [...new Set(rows.map(r=>r.doc))].sort();
+  const f = rows.filter(r=>r.t>=since && (!ONLINE.histUser || r.n===ONLINE.histUser) && (!ONLINE.histArea || (ONLINE.histArea==="archive" ? /^a\d{3}$/.test(r.doc) : r.doc===ONLINE.histArea)));
+  const groups = [], idx = {};
+  f.forEach(r=>{ const k = dayKey(r.t)+"|"+r.n; if (!(k in idx)) { idx[k] = groups.length; groups.push({ k, id:safeKey(k), day:dayKey(r.t), n:r.n, d:r.d, cells:{}, order:[] }); }
+    const g = groups[idx[k]], ck = r.doc+"|"+r.p; if (!g.cells[ck]) { g.cells[ck] = { doc:r.doc, p:r.p, to:r.v, from:r.f, n:0, tLast:r.t, c:r.c }; g.order.push(ck); } const c = g.cells[ck]; c.from = r.f; c.n++; c.tFirst = r.t; });
+  const shown = groups.slice(0, ONLINE.histLimit);
+  const body = shown.length ? shown.map(g=>{
+    const real = g.order.map(k=>g.cells[k]).filter(c=>String(c.from)!==String(c.to) || c.p==="*");
+    const open = !!ONLINE.openGroups["h"+g.id];
+    const det = open ? '<div class="grp-det"><table><thead><tr><th>Что</th><th>Было</th><th>Стало</th><th>Правок</th><th>Когда</th></tr></thead><tbody>'+real.map(c=>'<tr><td>'+esc(describeCell(c.doc,c.p))+(c.c?' ('+c.c+' значений)':'')+'<div class="muted" style="font-size:11px">'+esc(docLabel(c.doc))+'</div></td><td>'+histVal(c.from)+'</td><td><b>'+histVal(c.to)+'</b></td><td>'+c.n+'</td><td class="mono">'+hhmm(c.tLast)+'</td></tr>').join("")+'</tbody></table></div>' : "";
+    return '<div class="grp"><div class="grp-h" onclick="groupToggle(\'h'+g.id+'\')"><span class="grp-ar">'+(open?"▾":"▸")+'</span><span class="grp-d">'+dayLabel(g.day)+'</span><b>'+esc(g.n)+'</b><span class="muted">'+esc(deptLabel(g.d))+'</span><span class="mono muted" style="margin-left:auto">изменено ячеек: '+real.length+'</span></div>'+det+'</div>';
+  }).join("") : '<div class="muted" style="font-size:13px">Изменений за выбранный период нет.</div>';
+  const userOpts = '<option value="">Все сотрудники</option>'+names.map(n=>'<option value="'+esc(n)+'"'+(ONLINE.histUser===n?' selected':'')+'>'+esc(n)+'</option>').join("");
+  const areaOpts = '<option value="">Все разделы</option><option value="archive"'+(ONLINE.histArea==="archive"?' selected':'')+'>Архив</option>'+docs.filter(d=>!/^a\d{3}$/.test(d)).map(d=>'<option value="'+d+'"'+(ONLINE.histArea===d?' selected':'')+'>'+esc(docLabel(d))+'</option>').join("");
+  const dayOpts = [[1,"Сегодня"],[7,"7 дней"],[30,"30 дней"],[0,"Всё"]].map(([v,l])=>'<option value="'+v+'"'+(ONLINE.histDays===v?' selected':'')+'>'+l+'</option>').join("");
+  return '<div class="panel"><p class="panel-title">История правок по ячейкам</p>'+expl('какое число кто изменил и с какого на какое.','Строка — сотрудник за день. Если ячейку правили несколько раз, показано первое «было» и последнее «стало». Нужна для споров вроде «я такого не вносил». Хранятся последние несколько тысяч правок.')+
+    '<div class="adm-actions" style="margin-bottom:10px"><select class="fld fld-sm" onchange="logFilter(\'histUser\',this.value)">'+userOpts+'</select><select class="fld fld-sm" onchange="logFilter(\'histArea\',this.value)">'+areaOpts+'</select><select class="fld fld-sm" onchange="logFilter(\'histDays\',this.value)">'+dayOpts+'</select></div>'+body+
+    (groups.length > shown.length ? '<div style="margin-top:8px"><button class="btn" onclick="ONLINE.histLimit+=20;render()">Показать ещё ('+(groups.length-shown.length)+')</button></div>' : '')+'</div>';
+}
+
+// ======================================================================
+//  Смена пароля самим пользователем
+// ======================================================================
+function openPwModal(){
+  document.getElementById("modalRoot").innerHTML =
+    '<div class="modal-overlay" onclick="if(event.target===this) closeModal()"><div class="modal-box"><p class="modal-title">Смена пароля</p><p class="modal-sub">Новый пароль не короче 6 знаков. На других устройствах вам придётся войти заново.</p>'+
+    '<label class="auth-l" style="color:var(--muted)" for="pc_old">Текущий пароль</label><input class="fld" id="pc_old" type="password" autocomplete="current-password">'+
+    '<label class="auth-l" style="color:var(--muted)" for="pc_n1">Новый пароль</label><input class="fld" id="pc_n1" type="password" autocomplete="new-password">'+
+    '<label class="auth-l" style="color:var(--muted)" for="pc_n2">Повторите новый пароль</label><input class="fld" id="pc_n2" type="password" autocomplete="new-password" onkeydown="if(event.key===\'Enter\')doPwChange()">'+
+    '<div class="adm-msg" id="pc_msg" style="color:var(--danger)"></div>'+
+    '<div class="modal-actions"><button class="btn" onclick="closeModal()">Отмена</button><button class="btn btn-primary" onclick="doPwChange()">Сменить</button></div></div></div>';
+  setTimeout(()=>{ const el = document.getElementById("pc_old"); if (el) el.focus(); }, 50);
+}
+async function doPwChange(){
+  const o = document.getElementById("pc_old").value, n1 = document.getElementById("pc_n1").value, n2 = document.getElementById("pc_n2").value, msg = document.getElementById("pc_msg");
+  if (!srvOn()) { msg.textContent = "Доступно только на собственном сервере."; return; }
+  if (!o) { msg.textContent = "Введите текущий пароль."; return; }
+  if (n1.length < 6) { msg.textContent = "Новый пароль короче 6 знаков."; return; }
+  if (n1 !== n2) { msg.textContent = "Новые пароли не совпадают."; return; }
+  try { await api("POST","/api/password",{ old:o, new:n1 }); closeModal(); mainToast("Пароль изменён"); }
+  catch(e){ msg.textContent = (e&&e.message)||"Не получилось сменить пароль."; }
+}
+
+// ======================================================================
+//  Отчёт за период (год, квартал, свой период) с графиками
+// ======================================================================
+ONLINE.prYear = ""; ONLINE.prFrom = ""; ONLINE.prTo = ""; ONLINE.prCur = false;
+const ROMAN = ["I","II","III","IV"];
+function periodMonths(){
+  const out = [];
+  (state.archive||[]).forEach((a,i)=>{ if (a.inputs && a.plan && a.fact) { const mi = a.monthIndex!==undefined ? a.monthIndex : Math.max(0, MONTH_NAMES.indexOf(a.label)); out.push({ idx:i, label:a.label, year:a.year||state.currentYear||0, mi, a }); } });
+  return out;
+}
+function prSet(kind){
+  const ms = periodMonths(); if (!ms.length) return;
+  const years = [...new Set(ms.map(m=>m.year))].sort(), yr = parseInt(document.getElementById("pr_year").value,10) || years[years.length-1];
+  const pick = ms.filter(m=>m.year===yr && (kind==="year" || (m.mi>=(kind-1)*3 && m.mi<=kind*3-1)));
+  if (!pick.length) { mainToast("За выбранный период закрытых месяцев нет"); return; }
+  ONLINE.prYear = String(yr); ONLINE.prFrom = String(pick[0].idx); ONLINE.prTo = String(pick[pick.length-1].idx); render();
+}
+function periodPanelHtml(){
+  const ms = periodMonths();
+  if (!ms.length) return '<div class="panel"><p class="panel-title">Отчёт за период</p><p class="muted">Нет закрытых месяцев для отчёта.</p></div>';
+  const years = [...new Set(ms.map(m=>m.year))].sort();
+  const yr = ONLINE.prYear || String(years[years.length-1]);
+  const from = ONLINE.prFrom || String(ms[0].idx), to = ONLINE.prTo || String(ms[ms.length-1].idx);
+  const opt = (v)=>ms.map(m=>'<option value="'+m.idx+'"'+(String(v)===String(m.idx)?' selected':'')+'>'+esc(m.label)+' '+m.year+'</option>').join("");
+  return '<div class="panel"><p class="panel-title">Отчёт за период (год или квартал) с графиками</p>'+expl('сводка за несколько закрытых месяцев: динамика по месяцам и кварталам, по отделам и локациям, причины невыполнения.','Выберите год и нажмите «Год» или номер квартала, либо задайте месяцы вручную. В Excel графики лежат на отдельном листе «Графики», в PDF они вверху отчёта.')+
+    '<div class="adm-actions" style="margin-bottom:10px"><select class="fld fld-sm" id="pr_year" onchange="ONLINE.prYear=this.value">'+years.map(y=>'<option value="'+y+'"'+(String(y)===yr?' selected':'')+'>'+y+'</option>').join("")+'</select>'+
+    '<button class="btn" onclick="prSet(\'year\')">Год</button><button class="btn" onclick="prSet(1)">I кв</button><button class="btn" onclick="prSet(2)">II кв</button><button class="btn" onclick="prSet(3)">III кв</button><button class="btn" onclick="prSet(4)">IV кв</button></div>'+
+    '<div class="adm-actions" style="margin-bottom:10px"><span class="muted">с</span><select class="fld fld-sm" id="pr_from" onchange="ONLINE.prFrom=this.value">'+opt(from)+'</select><span class="muted">по</span><select class="fld fld-sm" id="pr_to" onchange="ONLINE.prTo=this.value">'+opt(to)+'</select>'+
+    '<label class="auth-chk" style="margin:0 0 0 8px"><input type="checkbox" id="pr_cur" onchange="ONLINE.prCur=this.checked"'+(ONLINE.prCur?' checked':'')+'> добавить текущий (незакрытый) месяц</label></div>'+
+    '<div class="adm-actions"><button class="btn btn-primary" onclick="periodExcel()">Скачать Excel с графиками</button><button class="btn" onclick="periodPdf()">PDF с графиками (печать)</button></div></div>';
+}
+function periodData(){
+  const ms = periodMonths(); if (!ms.length) throw new Error("Нет закрытых месяцев");
+  let i0 = ms.findIndex(m=>String(m.idx)===String(ONLINE.prFrom||ms[0].idx)), i1 = ms.findIndex(m=>String(m.idx)===String(ONLINE.prTo||ms[ms.length-1].idx));
+  if (i0 < 0) i0 = 0; if (i1 < 0) i1 = ms.length-1; if (i0 > i1) { const x = i0; i0 = i1; i1 = x; }
+  const items = ms.slice(i0, i1+1).map(m=>({ label:m.label, year:m.year, mi:m.mi, inputs:m.a.inputs, plan:m.a.plan, fact:m.a.fact, reasons:m.a.reasons||{}, cur:false }));
+  if (ONLINE.prCur) items.push({ label:MONTH_NAMES[state.monthCursor%12], year:state.currentYear, mi:state.monthCursor%12, inputs:state.inputs, plan:state.plan, fact:state.fact, reasons:state.reasons||{}, cur:true });
+  items.forEach(m=>{ m.t = totalsFullCtx(m.inputs, m.plan, m.fact); m.q = Math.floor(m.mi/3); });
+  const multiYear = new Set(items.map(m=>m.year)).size > 1;
+  const short = m=>m.label.slice(0,3)+(multiYear?" '"+String(m.year).slice(2):"")+(m.cur?"*":"");
+  const labels = items.map(short), ratio = (f,p)=> p>0 ? f/p : null;
+  const periodLabel = items[0].label+" "+items[0].year+(items.length>1?" — "+items[items.length-1].label+" "+items[items.length-1].year:"");
+  const sum = (arr,fn)=>arr.reduce((s,x)=>s+fn(x),0);
+  const tv = sum(items,m=>m.t.totalVolume), tp = sum(items,m=>m.t.totalPlan), tf = sum(items,m=>m.t.totalFact);
+  const sh = [];
+  // сводка + помесячно
+  const s1 = [["Отчёт за период", periodLabel], ["Месяцев", items.length], ["Объём к эвакуации, шт", tv], ["План, шт", tp], ["Факт, шт", tf], ["% выполнения", pctCell(tf,tp)], [""]];
+  const h1 = [{v:"Месяц",b:1},{v:"Год",b:1},{v:"Объём, шт",b:1},{v:"План, шт",b:1},{v:"Факт, шт",b:1},{v:"% выполнения",b:1}];
+  DIRECTIONS.forEach(d=>h1.push({v:"План "+d.label,b:1},{v:"Факт "+d.label,b:1},{v:"% "+d.label,b:1}));
+  s1.push(h1);
+  items.forEach(m=>{ const r = [m.label+(m.cur?" (текущий)":""), m.year, m.t.totalVolume, m.t.totalPlan, m.t.totalFact, pctCell(m.t.totalFact,m.t.totalPlan)]; DIRECTIONS.forEach(d=>r.push(m.t.planByDir[d.key], m.t.factByDir[d.key], pctCell(m.t.factByDir[d.key], m.t.planByDir[d.key]))); s1.push(r); });
+  const tr = ["Итого","",tv,tp,tf,pctCell(tf,tp)]; DIRECTIONS.forEach(d=>{ const p = sum(items,m=>m.t.planByDir[d.key]), f = sum(items,m=>m.t.factByDir[d.key]); tr.push(p,f,pctCell(f,p)); }); s1.push(tr.map(c=>(c&&typeof c==="object")?c:{v:c,b:1}));
+  sh.push({ name:"Период", rows:s1, widths:[22,8,12,12,12,14].concat(DIRECTIONS.flatMap(()=>[16,16,12])) });
+  // кварталы
+  const qs = [], qi = {};
+  items.forEach(m=>{ const k = m.year+"-"+m.q; if (!(k in qi)) { qi[k] = qs.length; qs.push({ k, label:ROMAN[m.q]+" кв "+m.year, vol:0, plan:0, fact:0, pd:{}, fd:{} }); DIRECTIONS.forEach(d=>{ qs[qs.length-1].pd[d.key]=0; qs[qs.length-1].fd[d.key]=0; }); }
+    const q = qs[qi[k]]; q.vol += m.t.totalVolume; q.plan += m.t.totalPlan; q.fact += m.t.totalFact; DIRECTIONS.forEach(d=>{ q.pd[d.key]+=m.t.planByDir[d.key]; q.fd[d.key]+=m.t.factByDir[d.key]; }); });
+  { const h = [{v:"Квартал",b:1},{v:"Объём, шт",b:1},{v:"План, шт",b:1},{v:"Факт, шт",b:1},{v:"% выполнения",b:1}]; DIRECTIONS.forEach(d=>h.push({v:"План "+d.label,b:1},{v:"Факт "+d.label,b:1},{v:"% "+d.label,b:1}));
+    sh.push({ name:"Кварталы", rows:[h].concat(qs.map(q=>{ const r = [q.label,q.vol,q.plan,q.fact,pctCell(q.fact,q.plan)]; DIRECTIONS.forEach(d=>r.push(q.pd[d.key],q.fd[d.key],pctCell(q.fd[d.key],q.pd[d.key]))); return r; })), widths:[16,12,12,12,14].concat(DIRECTIONS.flatMap(()=>[16,16,12])) }); }
+  // локации
+  const lp = {}, lf = {}; LOCATIONS.forEach(l=>{ lp[l.id]={}; lf[l.id]={}; DIRECTIONS.forEach(d=>{ lp[l.id][d.key]=0; lf[l.id][d.key]=0; }); });
+  items.forEach(m=>LOCATIONS.forEach(l=>DIRECTIONS.forEach(d=>{ lp[l.id][d.key]+=finalPlanForCtx(m.inputs,m.plan,l.id,d.key); lf[l.id][d.key]+=factCountForCtx(m.fact,l.id,d.key); })));
+  { const h = [{v:"Локация",b:1}]; DIRECTIONS.forEach(d=>h.push({v:"План "+d.label,b:1},{v:"Факт "+d.label,b:1})); h.push({v:"План всего",b:1},{v:"Факт всего",b:1},{v:"% выполнения",b:1});
+    sh.push({ name:"Локации", rows:[h].concat(LOCATIONS.map(l=>{ const r = [l.name]; let P=0,Fv=0; DIRECTIONS.forEach(d=>{ r.push(lp[l.id][d.key], lf[l.id][d.key]); P+=lp[l.id][d.key]; Fv+=lf[l.id][d.key]; }); r.push(P,Fv,pctCell(Fv,P)); return r; })), widths:[20].concat(DIRECTIONS.flatMap(()=>[16,16]), [14,14,14]) }); }
+  // причины
+  const rr = [];
+  items.forEach(m=>reasonRowsCtx(m.inputs,m.plan,m.fact,m.reasons).forEach(r=>{ if (r.reason) rr.push([m.label+" "+m.year, r.dept, r.loc, r.plan, r.fact, r.gap, r.reason]); }));
+  if (rr.length) sh.push({ name:"Причины невыполнения", rows:[[{v:"Месяц",b:1},{v:"Департамент",b:1},{v:"Локация",b:1},{v:"План, шт",b:1},{v:"Факт, шт",b:1},{v:"Недовывоз, шт",b:1},{v:"Причина",b:1}]].concat(rr), widths:[16,20,20,12,12,14,70] });
+  // графики
+  const PL = "#B9C7D4", FC = "#004D77", OR = "#C07A1C";
+  const charts = [];
+  const mk = (title, svg, legend)=>charts.push({ title, svg:chartSvg(title, svg, legend) });
+  mk("План и факт по месяцам, % выполнения", svgCombo(labels, [{name:"План",color:PL,values:items.map(m=>m.t.totalPlan)},{name:"Факт",color:FC,values:items.map(m=>m.t.totalFact)}], {name:"% выполнения",color:OR,values:items.map(m=>ratio(m.t.totalFact,m.t.totalPlan))}), [["План",PL],["Факт",FC],["% выполнения",OR]]);
+  mk("% выполнения по департаментам", svgLines(labels, DIRECTIONS.map(d=>({name:d.label,color:d.color,values:items.map(m=>ratio(m.t.factByDir[d.key],m.t.planByDir[d.key]))})), items.length<=8), DIRECTIONS.map(d=>[d.label,d.color]));
+  if (qs.length >= 2) mk("План и факт по кварталам", svgCombo(qs.map(q=>q.label.replace(" кв"," кв")), [{name:"План",color:PL,values:qs.map(q=>q.plan)},{name:"Факт",color:FC,values:qs.map(q=>q.fact)}], {name:"% выполнения",color:OR,values:qs.map(q=>ratio(q.fact,q.plan))}), [["План",PL],["Факт",FC],["% выполнения",OR]]);
+  mk("Объём к эвакуации по месяцам, шт", svgBars(labels, [{name:"Объём",color:FC,values:items.map(m=>m.t.totalVolume)}]), [["Объём к эвакуации",FC]]);
+  mk("По локациям за период: план и факт, шт", svgBars(LOCATIONS.map(l=>l.name.slice(0,9)), [{name:"План",color:PL,values:LOCATIONS.map(l=>DIRECTIONS.reduce((s,d)=>s+lp[l.id][d.key],0))},{name:"Факт",color:FC,values:LOCATIONS.map(l=>DIRECTIONS.reduce((s,d)=>s+lf[l.id][d.key],0))}]), [["План",PL],["Факт",FC]]);
+  return { title:"Эвакуация КТК — период: "+periodLabel, label:"период-"+items[0].label+"-"+items[0].year+(items.length>1?"-"+items[items.length-1].label+"-"+items[items.length-1].year:""), sheets:sh, charts };
+}
+// график с заголовком и легендой как единая картинка (SVG)
+function chartSvg(title, svg, legend){
+  const inner = svg.slice(svg.indexOf(">")+1, svg.lastIndexOf("</svg>"));
+  const leg = legend.map(([n,c],i)=>'<g transform="translate('+(48+i*130)+',276)"><rect width="10" height="10" rx="2" fill="'+c+'"/><text x="15" y="9" font-size="11" fill="#44586A">'+xmlEsc(n)+'</text></g>').join("");
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 300" width="100%" style="display:block;font-family:Arial,sans-serif"><rect width="600" height="300" fill="#fff"/><text x="12" y="20" font-size="14" font-weight="700" fill="#004D77">'+xmlEsc(title)+'</text><g transform="translate(0,26)">'+inner+'</g>'+leg+'</svg>';
+}
+function svgToPng(svg, w, h){
+  return new Promise((res, rej)=>{
+    const img = new Image();
+    img.onload = ()=>{ const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0,0,w,h); x.drawImage(img,0,0,w,h);
+      c.toBlob(b=>{ if (!b) return rej(new Error("png")); b.arrayBuffer().then(ab=>res(new Uint8Array(ab))); }, "image/png"); };
+    img.onerror = ()=>rej(new Error("Не удалось нарисовать график"));
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg.replace('width="100%"','width="'+w+'" height="'+h+'"'));
+  });
+}
+async function periodExcel(){
+  try {
+    const rep = periodData();
+    rep.images = [];
+    for (const c of rep.charts) rep.images.push({ data: await svgToPng(c.svg, 1200, 600), w:900, h:450 });
+    downloadBlob(buildXlsx(rep), "evac-"+rep.label.replace(/\s+/g,"-")+".xlsx");
+  } catch(e){ mainToast("Не получилось собрать отчёт: "+((e&&e.message)||e)); }
+}
+function periodPdf(){ try { printReport(periodData()); } catch(e){ mainToast("Не получилось собрать отчёт: "+((e&&e.message)||e)); } }
 
 render();
 </script></body></html>

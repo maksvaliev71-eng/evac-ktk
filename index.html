@@ -281,6 +281,23 @@
 .numfield input:disabled{background:#EEF2F6;color:#7B8C9B;cursor:not-allowed}
 .btn.ro,.btn:disabled{opacity:.4;cursor:not-allowed}
 @media(max-width:760px){.user-chip{display:none}}
+
+.st-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.st-card{border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:#fff}
+.st-h{font-weight:700;font-size:14px;margin-bottom:6px;color:var(--ink)}
+.st-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--border)}
+.st-k{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.03em;margin-bottom:3px}
+.st-chip{display:inline-block;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:999px}
+.st-ok{background:#D4EBDF;color:#155C45}.st-warn{background:#FBEBCB;color:#7A4E00}.st-bad{background:#F6D8D8;color:#9A2528}.st-wait{background:#EEF2F6;color:#556677}
+.st-sub{font-size:11.5px;color:var(--muted);margin-top:3px}.st-sub-bad{color:#9A2528;font-weight:600}
+.st-dl{margin-top:14px;padding-top:12px;border-top:1px dashed var(--border-strong)}
+.sig{display:flex;gap:10px;align-items:flex-start;padding:8px 12px;border-radius:8px;margin-bottom:6px;font-size:13px}
+.sig-i{flex:0 0 20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff}
+.sig-bad{background:#FBECEC}.sig-bad .sig-i{background:#B8393B}.sig-warn{background:#FFF6E5}.sig-warn .sig-i{background:#C07A1C}
+.sig-info{background:#EEF2F6}.sig-info .sig-i{background:#667889}.sig-ok{background:#E6F4EE}.sig-ok .sig-i{background:#1E7A5E}
+.cm{border-top:1px solid var(--border);padding:9px 0;font-size:13px}.cm-h{margin-bottom:3px}.cm-t{line-height:1.5}
+.cm-form textarea{resize:vertical}
+select.fld-sm{width:auto;min-width:140px}
 </style>
 
 <div class="side-deco left">
@@ -2772,7 +2789,9 @@ function canWriteArea(a){
   if (!ONLINE.me) return false;
   if (ONLINE.isAdmin) return true;
   if (a==="archive" || a==="meta") return false;
-  return permsFor(ONLINE.me.dept).includes(a);
+  if (!permsFor(ONLINE.me.dept).includes(a)) return false;
+  try { if (ONLINE.server && AREA_TO_KIND[a] && deadlineLockedClient(AREA_TO_KIND[a])) return false; } catch(e){}
+  return true;
 }
 function areaLabel(id){
   if (/^a\d{3}$/.test(id)) return "Архив";
@@ -2850,14 +2869,14 @@ function pushAll(){
 // ---------- чтение ----------
 function scheduleRender(){
   const a = document.activeElement;
-  if (a && a.tagName==="INPUT" && a.closest && a.closest("#content")) { ONLINE.renderPending = true; return; }
+  if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest("#content")) { ONLINE.renderPending = true; return; }
   render();
 }
 document.addEventListener("focusout", function(){
   if (!ONLINE.renderPending) return;
   setTimeout(function(){
     const a = document.activeElement;
-    if (ONLINE.renderPending && !(a && a.tagName==="INPUT")) { ONLINE.renderPending = false; render(); }
+    if (ONLINE.renderPending && !(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) { ONLINE.renderPending = false; render(); }
   }, 80);
 });
 function onAppSnap(snap){
@@ -2938,7 +2957,7 @@ function renderAuth(mode, msg){
   } else {
     body = '<p class="auth-title">Вход</p>'+note+
       '<label class="auth-l" for="lg_dept">Департамент</label><select class="fld" id="lg_dept">'+
-        '<option value="admin">Администратор</option>'+DEPTS.map(d=>'<option value="'+d.key+'">'+d.label+'</option>').join("")+'<option value="viewer">'+VIEWER.label+'</option></select>'+
+        '<option value="admin">Администратор</option>'+DEPTS.map(d=>'<option value="'+d.key+'">'+d.label+'</option>').join("")+'<option value="viewer">'+VIEWER.label+'</option><option value="manager">Руководитель</option></select>'+
       '<label class="auth-l" for="lg_login">Логин</label><input class="fld" id="lg_login" autocomplete="username">'+
       '<label class="auth-l" for="lg_pw">Пароль</label><input class="fld" id="lg_pw" type="password" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')doLogin()">'+
       '<label class="auth-chk"><input type="checkbox" id="lg_rem" checked> Запомнить на этом устройстве</label>'+
@@ -2992,7 +3011,8 @@ function enterApp(id, u, remember){
   if (remember && !ONLINE.server) { try { localStorage.setItem("evac_sess", JSON.stringify({ id, hash:u.hash })); } catch(e){} }
   authRoot().style.display = "none";
   try { window.evacVp && window.evacVp(true); } catch(e){}
-  if (ONLINE.isAdmin && !ONLINE.unsubLog) { if (ONLINE.server) { ONLINE.unsubLog = ()=>{}; refreshServerLog(); } else ONLINE.unsubLog = ONLINE.db.collection("log").onSnapshot(onLogSnap, ()=>{}); }
+  if (ONLINE.server && !ONLINE.unsubLog) { ONLINE.unsubLog = ()=>{}; refreshServerLog(); }
+  else if (ONLINE.isAdmin && !ONLINE.unsubLog) { ONLINE.unsubLog = ONLINE.db.collection("log").onSnapshot(onLogSnap, ()=>{}); }
   if (!ONLINE.isAdmin && state.tab==="admin") state.tab = "dashboard";
   ONLINE.myLog = ((ONLINE.logs.length ? [] : [])).slice();
   loadMyLog();
@@ -3064,11 +3084,12 @@ function applyPerms(){
     const a = m && BTN_AREAS[m[1]];
     if (a && !canWriteArea(a)) { if (a==="meta"||a==="archive") { el.hidden = true; el.style.setProperty("display","none","important"); } else { el.disabled = true; el.classList.add("ro"); } }
   });
+  try { if (typeof extBanner==="function") extBanner(); } catch(e){}
 }
 
 // ---------- админ-панель ----------
 function fmtTime(t){ const d = new Date(t); return d.toLocaleDateString("ru-RU")+" "+d.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"}); }
-function deptLabel(k){ if (k==="admin") return "Администратор"; if (k==="viewer") return VIEWER.label; return (DEPTS.find(d=>d.key===k)||{label:k}).label; }
+function deptLabel(k){ if (k==="admin") return "Администратор"; if (k==="viewer") return VIEWER.label; if (k==="manager") return "Руководитель"; return (DEPTS.find(d=>d.key===k)||{label:k}).label; }
 function renderAdminTab(){
   if (!ONLINE.isAdmin) return "";
   const users = Object.keys(ONLINE.users).map(id=>({id, ...ONLINE.users[id]})).sort((a,b)=>(a.dept==="admin"?0:1)-(b.dept==="admin"?0:1) || a.name.localeCompare(b.name,"ru"));
@@ -3086,7 +3107,7 @@ function renderAdminTab(){
   const addForm = '<div class="adm-form">'+
     '<div><label class="auth-l" for="nu_name">Имя</label><input class="fld" id="nu_name" autocomplete="off"></div>'+
     '<div><label class="auth-l" for="nu_login">Логин</label><input class="fld" id="nu_login" autocomplete="off"></div>'+
-    '<div><label class="auth-l" for="nu_dept">Департамент</label><select class="fld" id="nu_dept">'+DEPTS.map(d=>'<option value="'+d.key+'">'+d.label+'</option>').join("")+'<option value="viewer">'+VIEWER.label+'</option><option value="admin">Администратор</option></select></div>'+
+    '<div><label class="auth-l" for="nu_dept">Департамент</label><select class="fld" id="nu_dept">'+DEPTS.map(d=>'<option value="'+d.key+'">'+d.label+'</option>').join("")+'<option value="viewer">'+VIEWER.label+'</option><option value="manager">Руководитель (просмотр и комментарии)</option><option value="admin">Администратор</option></select></div>'+
     '<div><label class="auth-l" for="nu_pw">Пароль</label><input class="fld" id="nu_pw" type="password" autocomplete="new-password"></div>'+
     '<div class="adm-form-btn"><button class="btn btn-primary" onclick="adminAddUser()">Создать</button></div></div>';
   const head = DEPTS.map(d=>'<th>'+d.label+'</th>').join("");
@@ -3189,7 +3210,7 @@ const srvCache = { app:{}, users:{}, perms:null };
 function deliverApp(){ onAppSnap({ docs: Object.keys(srvCache.app).map(id=>({ id, data:()=>srvCache.app[id] })) }); }
 function deliverUsers(){ onAuthSnap({ docs: Object.keys(srvCache.users).map(id=>({ id, data:()=>srvCache.users[id] })) }); }
 async function refreshServerLog(){
-  try { const r = await api("GET","/api/log"); ONLINE.logs = (r.entries||[]).map(e=>({ t:e.t, n:e.n, d:e.d, a:(e.a||[]).map(areaLabel) })); if (ONLINE.isAdmin && state.tab==="admin") scheduleRender(); } catch(e){}
+  try { const r = await api("GET","/api/log"); ONLINE.logs = (r.entries||[]).map(e=>({ t:e.t, n:e.n, d:e.d, a:(e.a||[]).map(areaLabel) })); if ((ONLINE.isAdmin && state.tab==="admin") || state.tab==="dashboard") scheduleRender(); } catch(e){}
 }
 function makeHttpDb(){
   return {
@@ -3204,6 +3225,7 @@ async function serverStart(){
   const a = await api("GET","/api/app"); srvCache.app = a.docs || {};
   const u = await api("GET","/api/users"); srvCache.users = u.users || {};
   const p = await api("GET","/api/perms"); srvCache.perms = p.map;
+  try { const x = await api("GET","/api/ext"); ONLINE.ext = { status:x.status||{}, deadlines:x.deadlines||{}, comments:x.comments||[] }; } catch(e){}
   ONLINE.booted = true; ONLINE.gotApp = true; ONLINE.gotAuth = true;
   onPermsSnap({ exists: !!srvCache.perms, data:()=>({ map: srvCache.perms }) });
   deliverUsers(); deliverApp();
@@ -3212,7 +3234,9 @@ async function serverStart(){
     es.addEventListener("app", ev=>{ const m = JSON.parse(ev.data); if (m.data) srvCache.app[m.id] = m.data; else delete srvCache.app[m.id]; deliverApp(); });
     es.addEventListener("users", async ()=>{ try { const r = await api("GET","/api/users"); srvCache.users = r.users||{}; deliverUsers(); } catch(e){} });
     es.addEventListener("perms", async ()=>{ try { const r = await api("GET","/api/perms"); srvCache.perms = r.map; onPermsSnap({ exists: !!r.map, data:()=>({ map: r.map }) }); } catch(e){} });
-    es.addEventListener("log", ()=>{ if (ONLINE.isAdmin) refreshServerLog(); });
+    es.addEventListener("log", ()=>{ if (ONLINE.me) refreshServerLog(); });
+    es.addEventListener("ext", ()=>{ if (typeof loadExt==="function" && ONLINE.me) loadExt(); });
+    es.addEventListener("reload", ()=>{ location.reload(); });
     es.onerror = ()=>{ /* браузер переподключится сам */ };
     es.onopen = async ()=>{ if (ONLINE.me) { try { const a2 = await api("GET","/api/app"); srvCache.app = a2.docs||{}; deliverApp(); } catch(e){} } };
   }
@@ -3254,6 +3278,353 @@ async function bootOnline(){
   ONLINE.db.doc("cfg/perms").onSnapshot(onPermsSnap, ()=>{});
 }
 bootOnline();
+
+
+// ======================================================================
+//  РАСШИРЕНИЯ (режим собственного сервера): статусы готовности, сроки,
+//  сигналы, комментарии руководителя, лента изменений, отчёты, почта, копии
+// ======================================================================
+ONLINE.ext = { status:{}, deadlines:{}, comments:[] };
+ONLINE.mailCfg = null; ONLINE.mailLog = []; ONLINE.backups = null; ONLINE.admLoaded = false; ONLINE.cDraft = ""; ONLINE.cLoc = "";
+
+const MANAGER = { key:"manager", label:"Руководитель (просмотр и комментарии)" };
+const STATUS_DEFS = [
+  { dept:"vnutriros", label:"Внутрироссийский", kinds:[["plan","План"],["fact","Факт"]] },
+  { dept:"export",    label:"Экспортный",       kinds:[["plan","План"],["fact","Факт"]] },
+  { dept:"import",    label:"Импорт",           kinds:[["import","Сдача импорта"]] },
+  { dept:"rail",      label:"ЖД отдел",         kinds:[["rail","Поезда и доли"]] },
+];
+const KIND_TITLE = { plan:"план", fact:"факт", import:"сдача импорта", rail:"поезда" };
+const AREA_TO_KIND = { plan_vnutriros:"plan", plan_export:"plan", fact_vnutriros:"fact", fact_export:"fact", import:"import", routes:"rail" };
+
+function fmtDM(d){ const m = String(d||"").match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? m[3]+"."+m[2] : ""; }
+function deadlineOf(kind){ return (ONLINE.ext.deadlines||{})[kind] || ""; }
+function deadlineLockedClient(kind){ const d = deadlineOf(kind); return !!d && Date.now() > Date.parse(d+"T23:59:59+03:00"); }
+function daysLeft(d){ return Math.floor((Date.parse(d+"T23:59:59+03:00") - Date.now()) / 86400000); }
+function statusOf(dept, kind){ const s = (ONLINE.ext.status||{}); return (s[dept] && s[dept][kind]) || null; }
+function isReady(dept, kind){ const s = statusOf(dept, kind); return !!(s && s.ready && !s.dirty); }
+function srvOn(){ return !!ONLINE.server; }
+
+async function loadExt(){
+  try { const r = await api("GET","/api/ext"); ONLINE.ext = { status:r.status||{}, deadlines:r.deadlines||{}, comments:r.comments||[] }; if (ONLINE.booted && ONLINE.me) scheduleRender(); } catch(e){}
+}
+
+// ---------- статус готовности ----------
+async function statusSet(dept, kind, ready){
+  try { await api("POST","/api/status",{ dept, kind, ready }); await loadExt(); }
+  catch(e){ mainToast((e&&e.message)||"Не получилось сохранить статус"); }
+}
+async function deadlinesSave(){
+  const o = {}; ["plan","fact","import","rail"].forEach(k=>{ const el = document.getElementById("dl_"+k); o[k] = el ? el.value : ""; });
+  try { await api("PUT","/api/deadlines", o); await loadExt(); mainToast("Сроки сохранены"); }
+  catch(e){ mainToast((e&&e.message)||"Не получилось сохранить сроки"); }
+}
+function statusPanelHtml(){
+  const me = ONLINE.me, isAdm = ONLINE.isAdmin;
+  let total = 0, done = 0;
+  const cards = STATUS_DEFS.map(df=>{
+    const mine = isAdm || (me && me.dept === df.dept);
+    const rows = df.kinds.map(([k,lb],ix)=>{
+      total++;
+      const st = statusOf(df.dept,k), d = deadlineOf(k), locked = deadlineLockedClient(k);
+      let chip, ready = false;
+      if (st && st.ready && !st.dirty) { ready = true; done++; chip = '<span class="st-chip st-ok" title="'+esc(st.by||"")+'">&#10003; готово</span><div class="st-sub">'+fmtTime(st.t)+' · '+esc(st.by||"")+'</div>'; }
+      else if (st && st.dirty) chip = '<span class="st-chip st-warn">изменено после подтверждения</span>';
+      else if (locked) chip = '<span class="st-chip st-bad">срок истёк</span>';
+      else chip = '<span class="st-chip st-wait">ждём</span>';
+      const dl = d ? '<div class="st-sub'+(locked&&!ready?' st-sub-bad':'')+'">срок: до '+fmtDM(d)+'</div>' : '';
+      let btn = "";
+      if (mine) btn = ready
+        ? '<button class="btn" onclick="statusSet(\''+df.dept+'\',\''+k+'\',false)">Снять</button>'
+        : '<button class="btn btn-primary" onclick="statusSet(\''+df.dept+'\',\''+k+'\',true)">'+(isAdm && me.dept!==df.dept ? 'Подтвердить за отдел' : 'Готово')+'</button>';
+      return '<div class="st-row"><div><div class="st-k">'+lb+'</div>'+chip+dl+'</div><div>'+btn+'</div></div>';
+    }).join("");
+    return '<div class="st-card"><div class="st-h">'+df.label+'</div>'+rows+'</div>';
+  }).join("");
+  let dlForm = "";
+  if (isAdm) dlForm = '<div class="st-dl"><div class="auth-l" style="margin:0 0 6px;color:var(--muted)">Сроки внесения (включительно, по Москве). После срока отдел не сможет менять свои данные. Пустое поле — без срока.</div><div class="adm-form">'+
+    [["plan","Планы"],["fact","Факты"],["import","Сдача импорта"],["rail","Поезда"]].map(([k,l])=>'<div><label class="auth-l" for="dl_'+k+'">'+l+'</label><input class="fld" type="date" id="dl_'+k+'" value="'+esc(deadlineOf(k))+'"></div>').join("")+
+    '<div class="adm-form-btn"><button class="btn btn-primary" onclick="deadlinesSave()">Сохранить сроки</button></div></div></div>';
+  return '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap"><p class="panel-title" style="margin:0">Готовность данных за месяц</p><span class="mono muted" style="font-size:12.5px">подтвердили '+done+' из '+total+'</span></div>'+
+    expl('кто из департаментов уже внёс свои данные и нажал «Готово». Обновляется у всех сразу.','«Готово» нажимает сам департамент. Если после этого он что-то поменял, статус станет «изменено после подтверждения» — тогда нужно нажать ещё раз. Администратор видит всё и может подтвердить за отдел.')+
+    '<div class="st-grid">'+cards+'</div>'+dlForm+'</div>';
+}
+
+// ---------- баннер срока над таблицами ----------
+function extBanner(){
+  if (!srvOn() || !ONLINE.me || ONLINE.isAdmin) return;
+  const df = STATUS_DEFS.find(x=>x.dept===ONLINE.me.dept); if (!df) return;
+  const msgs = [];
+  df.kinds.forEach(([k,lb])=>{
+    const d = deadlineOf(k); if (!d) return;
+    if (deadlineLockedClient(k) && !isReady(df.dept,k)) msgs.push('<b>Срок внесения («'+lb.toLowerCase()+'») истёк '+fmtDM(d)+'.</b> Поля закрыты, обратитесь к администратору.');
+    else if (deadlineLockedClient(k)) msgs.push('Срок («'+lb.toLowerCase()+'») истёк '+fmtDM(d)+', поля закрыты.');
+    else if (!isReady(df.dept,k)) msgs.push('Срок внесения («'+lb.toLowerCase()+'») — до <b>'+fmtDM(d)+'</b>. Закончив, нажмите «Готово» на вкладке «Дашборд».');
+  });
+  if (!msgs.length) return;
+  const c = document.getElementById("content"); if (!c) return;
+  c.insertAdjacentHTML("afterbegin", '<div class="adm-warn">'+msgs.join("<br>")+'</div>');
+}
+
+// ---------- сигналы ----------
+function signalsHtml(){
+  const sig = [];
+  STATUS_DEFS.forEach(df=>df.kinds.forEach(([k,lb])=>{
+    const st = statusOf(df.dept,k), d = deadlineOf(k), ready = isReady(df.dept,k);
+    if (!ready && d && deadlineLockedClient(k)) sig.push({ lvl:2, text:df.label+": срок «"+lb.toLowerCase()+"» истёк "+fmtDM(d)+", подтверждения нет" });
+    else if (!ready && d && daysLeft(d) <= 1) sig.push({ lvl:1, text:df.label+": срок «"+lb.toLowerCase()+"» — "+fmtDM(d)+", ещё не подтверждено" });
+    if (st && st.dirty) sig.push({ lvl:1, text:df.label+": «"+lb.toLowerCase()+"» изменён после подтверждения" });
+  }));
+  const t = totalsFull();
+  LOCATIONS.forEach(l=>{
+    const o20 = overshoot20For(l.id), o40 = overshoot40For(l.id);
+    if (o20>0 || o40>0) sig.push({ lvl:1, text:l.name+": планы департаментов больше излишка"+(o20?" на "+fmt(o20)+" × 20'":"")+(o40?(o20?",":"")+" на "+fmt(o40)+" × 40'":"")+" — остаток уйдёт в минус" });
+  });
+  ["vnutriros","export"].forEach(dk=>{
+    const sum = LOCATIONS.reduce((s,l)=>s+manualCountFor(l.id,dk),0), d = DIRECTIONS.find(x=>x.key===dk);
+    if (t.totalVolume>0 && sum===0 && !isReady(dk,"plan")) sig.push({ lvl:0, text:d.label+": план ещё не внесён" });
+  });
+  if (t.totalFact > 0) {
+    const rows = [];
+    LOCATIONS.forEach(l=>DIRECTIONS.forEach(d=>{ const p = finalPlanFor(l.id,d.key), f = factCountFor(l.id,d.key); if (p>=10 && f/p<0.8) rows.push({ name:l.name+" · "+d.label, r:f/p, gap:p-f }); }));
+    rows.sort((a,b)=>a.r-b.r).slice(0,5).forEach(x=>sig.push({ lvl:x.r<0.5?2:1, text:x.name+": выполнено "+Math.round(x.r*100)+"%, недовывоз "+fmt(x.gap)+" шт" }));
+  }
+  const rt = routesTotals(state.routes);
+  if (rt.plan>0 && rt.fact>0 && rt.fact/rt.plan<0.8) sig.push({ lvl:1, text:"Поезда: отправлено "+Math.round(rt.fact/rt.plan*100)+"% от плана ("+fmt(rt.fact)+" из "+fmt(rt.plan)+")" });
+  sig.sort((a,b)=>b.lvl-a.lvl);
+  const cls = ["sig-info","sig-warn","sig-bad"], ico = ["i","!","!"];
+  const body = sig.length ? sig.slice(0,12).map(s=>'<div class="sig '+cls[s.lvl]+'"><span class="sig-i">'+ico[s.lvl]+'</span><span>'+esc(s.text)+'</span></div>').join("")
+    : '<div class="sig sig-ok"><span class="sig-i">&#10003;</span><span>Отклонений не найдено</span></div>';
+  return '<div class="panel"><p class="panel-title">Сигналы</p>'+expl('автоматическая проверка данных: где план больше излишка, где факт отстаёт, чьи сроки горят.','Красное — срочно, жёлтое — обратите внимание, серое — информация. Список обновляется вместе с данными.')+body+'</div>';
+}
+
+// ---------- сравнение с прошлым месяцем ----------
+function compareHtml(){
+  const last = (state.archive||[]).filter(a=>a.inputs&&a.plan&&a.fact).slice(-1)[0]; if (!last) return "";
+  const lt = totalsFullCtx(last.inputs, last.plan, last.fact), ct = totalsFull();
+  const row = (name, p0, f0, p1, f1)=>{
+    const r0 = p0>0 ? f0/p0 : null, r1 = p1>0 ? f1/p1 : null;
+    const dd = (r0!==null && r1!==null) ? Math.round((r1-r0)*100) : null;
+    return '<tr><td class="loc-name">'+name+'</td><td>'+fmt(p0)+'</td><td>'+fmt(f0)+'</td><td>'+(r0===null?"—":Math.round(r0*100)+"%")+'</td><td>'+fmt(p1)+'</td><td>'+fmt(f1)+'</td><td>'+(r1===null?"—":Math.round(r1*100)+"%")+'</td>'+
+      '<td style="font-weight:600;color:'+(dd===null?'var(--muted)':dd>=0?'var(--ok)':'var(--danger)')+'">'+(dd===null?"—":(dd>0?"+":"")+dd+" п.п.")+'</td></tr>';
+  };
+  const rows = DIRECTIONS.map(d=>row(d.label, lt.planByDir[d.key], lt.factByDir[d.key], ct.planByDir[d.key], ct.factByDir[d.key])).join("")+row("<b>Всего</b>", lt.totalPlan, lt.totalFact, ct.totalPlan, ct.totalFact);
+  return '<div class="panel"><p class="panel-title">Сравнение с прошлым месяцем</p>'+expl('как текущий месяц выглядит на фоне последнего закрытого ('+last.label+').','В колонке «Изменение» разница в процентах выполнения: зелёный — лучше прошлого месяца, красный — хуже. Пока факт текущего месяца не внесён, процент будет низким.')+
+    '<div style="overflow-x:auto"><table><thead><tr><th rowspan="2">Департамент</th><th colspan="3" style="text-align:center">'+esc(last.label)+'</th><th colspan="3" style="text-align:center">Текущий месяц</th><th rowspan="2">Изменение</th></tr><tr><th>План</th><th>Факт</th><th>%</th><th>План</th><th>Факт</th><th>%</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+}
+
+// ---------- комментарии руководителя ----------
+async function commentSend(){
+  const ta = document.getElementById("cm_text"), sel = document.getElementById("cm_loc"); if (!ta) return;
+  const text = ta.value.trim(); if (!text) return;
+  try { await api("POST","/api/comments",{ text, loc: sel ? sel.value : "" }); ONLINE.cDraft = ""; await loadExt(); }
+  catch(e){ mainToast((e&&e.message)||"Не получилось отправить"); }
+}
+async function commentDel(id){ try { await api("DELETE","/api/comments/"+id); await loadExt(); } catch(e){ mainToast((e&&e.message)||"Не получилось удалить"); } }
+function commentsHtml(){
+  const can = ONLINE.me && (ONLINE.me.dept==="manager" || ONLINE.isAdmin);
+  const list = (ONLINE.ext.comments||[]).slice(0,15);
+  const locName = id=>{ const l = LOCATIONS.find(x=>x.id===id); return l ? l.name : ""; };
+  const items = list.length ? list.map(c=>'<div class="cm"><div class="cm-h"><b>'+esc(c.n)+'</b>'+(c.loc&&locName(c.loc)?' · <span class="st-chip st-wait">'+esc(locName(c.loc))+'</span>':'')+' <span class="muted">'+fmtTime(c.t)+'</span>'+
+      ((ONLINE.isAdmin || (ONLINE.me && c.u===ONLINE.me.id)) ? ' <button class="btn" style="padding:1px 8px;margin-left:6px" onclick="commentDel(\''+c.id+'\')">&times;</button>' : '')+'</div><div class="cm-t">'+esc(c.text).replace(/\n/g,"<br>")+'</div></div>').join("")
+    : '<div class="muted" style="font-size:13px">Комментариев пока нет.</div>';
+  const form = can ? '<div class="cm-form"><textarea class="fld" id="cm_text" rows="3" maxlength="1000" placeholder="Комментарий руководителя: что обратить внимание, что уточнить…" oninput="ONLINE.cDraft=this.value">'+esc(ONLINE.cDraft)+'</textarea>'+
+    '<div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap"><select class="fld fld-sm" id="cm_loc" onchange="ONLINE.cLoc=this.value"><option value="">Общий</option>'+LOCATIONS.map(l=>'<option value="'+l.id+'"'+(ONLINE.cLoc===l.id?' selected':'')+'>'+l.name+'</option>').join("")+'</select>'+
+    '<button class="btn btn-primary" onclick="commentSend()">Отправить</button></div></div>' : '';
+  return '<div class="panel"><p class="panel-title">Комментарии руководителя</p>'+expl('заметки по месяцу или конкретной локации. Видны всем.','Писать могут руководитель и администратор. Удалить можно свой комментарий.')+form+'<div style="margin-top:12px">'+items+'</div></div>';
+}
+
+// ---------- лента изменений ----------
+function feedHtml(){
+  const L = (ONLINE.logs||[]).slice(0,12);
+  const rows = L.length ? L.map(e=>'<tr><td>'+fmtTime(e.t)+'</td><td>'+esc(e.n)+'</td><td>'+esc(deptLabel(e.d))+'</td><td>'+esc((e.a||[]).join(", "))+'</td></tr>').join("") : '<tr><td colspan="4" class="muted">Изменений пока нет.</td></tr>';
+  return '<div class="panel"><p class="panel-title">Последние изменения</p>'+expl('кто и когда вносил данные.','Одна строка — серия правок в одной части данных или нажатие «Готово».')+
+    '<div style="overflow-x:auto"><table><thead><tr><th>Когда</th><th>Кто</th><th>Департамент</th><th>Что</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+}
+
+// ---------- отчёты: Excel и PDF ----------
+function pctCell(a,b){ return b>0 ? { v:a/b, p:true } : "—"; }
+function reportData(){
+  const label = MONTH_NAMES[state.monthCursor%12]+" "+(state.currentYear||""), t = totalsFull();
+  const sh = [];
+  const sum = [["Отчёт за месяц", label], ["Объём к эвакуации, шт", t.totalVolume], ["План, шт", t.totalPlan], ["Факт, шт", t.totalFact], ["% выполнения", pctCell(t.totalFact,t.totalPlan)], [""]];
+  sum.push([{v:"Департамент",b:1},{v:"План, шт",b:1},{v:"Факт, шт",b:1},{v:"% выполнения",b:1}]);
+  DIRECTIONS.forEach(d=>sum.push([d.label, t.planByDir[d.key], t.factByDir[d.key], pctCell(t.factByDir[d.key], t.planByDir[d.key])]));
+  const rt = routesTotals(state.routes); sum.push([""]); sum.push(["Поезда: план / факт, шт", rt.plan, rt.fact, pctCell(rt.fact, rt.plan)]);
+  sh.push({ name:"Итоги", rows:sum, widths:[34,16,16,16] });
+  const hd = [{v:"Локация",b:1},{v:"Ресурс 20'",b:1},{v:"Ресурс 40'",b:1},{v:"Норма 20'",b:1},{v:"Норма 40'",b:1},{v:"Излишек 20'",b:1},{v:"Излишек 40'",b:1}];
+  DIRECTIONS.forEach(d=>{ hd.push({v:"План "+d.label,b:1}); hd.push({v:"Факт "+d.label,b:1}); });
+  hd.push({v:"План всего",b:1}, {v:"Факт всего",b:1}, {v:"% выполнения",b:1});
+  const lr = [hd];
+  LOCATIONS.forEach(l=>{
+    const i = state.inputs[l.id]; let pT=0, fT=0; const r = [l.name, effRes(i,"c20"), effRes(i,"c40"), i.norm20||0, i.norm40||0, volume20For(l.id), volume40For(l.id)];
+    DIRECTIONS.forEach(d=>{ const p = finalPlanFor(l.id,d.key), f = factCountFor(l.id,d.key); pT+=p; fT+=f; r.push(p, f); });
+    r.push(pT, fT, pctCell(fT,pT)); lr.push(r);
+  });
+  sh.push({ name:"Локации", rows:lr, widths:[20,12,12,12,12,12,12].concat(DIRECTIONS.flatMap(()=>[16,16]), [14,14,14]) });
+  const ah = [{v:"Месяц",b:1},{v:"Год",b:1},{v:"Объём, шт",b:1},{v:"План, шт",b:1},{v:"Факт, шт",b:1},{v:"% выполнения",b:1}];
+  DIRECTIONS.forEach(d=>{ ah.push({v:"План "+d.label,b:1},{v:"Факт "+d.label,b:1},{v:"% "+d.label,b:1}); });
+  const ar = [ah];
+  (state.archive||[]).forEach(a=>{
+    const r = [a.label, a.year||"", a.totalVolume||0, a.totalPlan||0, a.totalFact||0, pctCell(a.totalFact||0, a.totalPlan||0)];
+    DIRECTIONS.forEach(d=>{ const p = (a.planByDir||{})[d.key]||0, f = (a.factByDir||{})[d.key]||0; r.push(p, f, pctCell(f,p)); });
+    ar.push(r);
+  });
+  sh.push({ name:"Архив", rows:ar, widths:[14,8,12,12,12,14].concat(DIRECTIONS.flatMap(()=>[16,16,12])) });
+  const cm = (ONLINE.ext.comments||[]).slice(0,30);
+  if (cm.length) sh.push({ name:"Комментарии", rows:[[{v:"Когда",b:1},{v:"Кто",b:1},{v:"Локация",b:1},{v:"Текст",b:1}]].concat(cm.map(c=>{ const l = LOCATIONS.find(x=>x.id===c.loc); return [fmtTime(c.t), c.n, l?l.name:"Общий", c.text]; })), widths:[18,20,16,80] });
+  return { title:"Эвакуация КТК — "+label, label, sheets:sh };
+}
+function xmlEsc(s){ return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,""); }
+function colName(i){ let s=""; i++; while(i>0){ const m=(i-1)%26; s=String.fromCharCode(65+m)+s; i=Math.floor((i-1)/26); } return s; }
+function crc32(buf){ if(!crc32.t){ crc32.t=[]; for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++) c = c&1 ? 0xEDB88320^(c>>>1) : c>>>1; crc32.t[n]=c>>>0; } } let crc=-1; for(let i=0;i<buf.length;i++) crc = crc32.t[(crc^buf[i])&255]^(crc>>>8); return (crc^-1)>>>0; }
+function zipStore(files, mime){
+  const enc = new TextEncoder(), chunks = [], central = []; let offset = 0;
+  files.forEach(f=>{
+    const name = enc.encode(f.name), data = f.data, crc = crc32(data);
+    const lh = new DataView(new ArrayBuffer(30)); lh.setUint32(0,0x04034b50,true); lh.setUint16(4,20,true); lh.setUint16(6,0x0800,true); lh.setUint16(12,0x21,true); lh.setUint32(14,crc,true); lh.setUint32(18,data.length,true); lh.setUint32(22,data.length,true); lh.setUint16(26,name.length,true);
+    chunks.push(new Uint8Array(lh.buffer), name, data);
+    const ch = new DataView(new ArrayBuffer(46)); ch.setUint32(0,0x02014b50,true); ch.setUint16(4,20,true); ch.setUint16(6,20,true); ch.setUint16(8,0x0800,true); ch.setUint16(14,0x21,true); ch.setUint32(16,crc,true); ch.setUint32(20,data.length,true); ch.setUint32(24,data.length,true); ch.setUint16(28,name.length,true); ch.setUint32(42,offset,true);
+    central.push(new Uint8Array(ch.buffer), name);
+    offset += 30 + name.length + data.length;
+  });
+  let cdSize = 0; central.forEach(c=>{ cdSize += c.length; });
+  const end = new DataView(new ArrayBuffer(22)); end.setUint32(0,0x06054b50,true); end.setUint16(8,files.length,true); end.setUint16(10,files.length,true); end.setUint32(12,cdSize,true); end.setUint32(16,offset,true);
+  return new Blob([...chunks, ...central, new Uint8Array(end.buffer)], { type:mime });
+}
+function buildXlsx(rep){
+  const enc = new TextEncoder(), F = (name, text)=>({ name, data: enc.encode(text) });
+  const sheetsXml = rep.sheets.map(sh=>{
+    const cols = '<cols>'+(sh.widths||[]).map((w,i)=>'<col min="'+(i+1)+'" max="'+(i+1)+'" width="'+w+'" customWidth="1"/>').join("")+'</cols>';
+    const rows = sh.rows.map((r,ri)=>'<row r="'+(ri+1)+'">'+r.map((c,ci)=>{
+      const ref = colName(ci)+(ri+1), o = (c && typeof c==="object") ? c : { v:c }, v = o.v;
+      if (typeof v === "number" && isFinite(v)) return '<c r="'+ref+'" s="'+(o.p?2:o.b?3:0)+'"><v>'+(o.p ? Math.round(v*10000)/10000 : Math.round(v*100)/100)+'</v></c>';
+      if (v === "" || v == null) return "";
+      return '<c r="'+ref+'" t="inlineStr" s="'+(o.b?1:0)+'"><is><t xml:space="preserve">'+xmlEsc(v)+'</t></is></c>';
+    }).join("")+'</row>').join("");
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+(sh.widths?cols:"")+'<sheetData>'+rows+'</sheetData></worksheet>';
+  });
+  const files = [
+    F("[Content_Types].xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+rep.sheets.map((s,i)=>'<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join("")+'</Types>'),
+    F("_rels/.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'),
+    F("xl/workbook.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'+rep.sheets.map((s,i)=>'<sheet name="'+xmlEsc(s.name)+'" sheetId="'+(i+1)+'" r:id="rId'+(i+1)+'"/>').join("")+'</sheets></workbook>'),
+    F("xl/_rels/workbook.xml.rels", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+rep.sheets.map((s,i)=>'<Relationship Id="rId'+(i+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet'+(i+1)+'.xml"/>').join("")+'<Relationship Id="rId'+(rep.sheets.length+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'),
+    F("xl/styles.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEBF2F7"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="3" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'),
+  ];
+  sheetsXml.forEach((x,i)=>files.push(F("xl/worksheets/sheet"+(i+1)+".xml", x)));
+  return zipStore(files, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+}
+function reportStamp(){ const d = new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function reportExcel(){
+  try {
+    const blob = buildXlsx(reportData()), a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "evac-report-"+reportStamp()+".xlsx"; document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  } catch(e){ mainToast("Не получилось собрать Excel: "+((e&&e.message)||e)); }
+}
+function cellText(c){ const o = (c && typeof c==="object") ? c : { v:c }; if (typeof o.v==="number") return o.p ? Math.round(o.v*100)+"%" : fmt(o.v); return esc(o.v==null?"":o.v); }
+function reportPdf(){
+  const rep = reportData();
+  const tables = rep.sheets.map(sh=>'<h2>'+esc(sh.name)+'</h2><table>'+sh.rows.map((r,ri)=>'<tr>'+r.map(c=>{ const o = (c && typeof c==="object") ? c : {}; const tag = o.b ? "th" : "td"; return '<'+tag+(typeof (o.v!==undefined?o.v:c)==="number"?' class="n"':'')+'>'+cellText(c)+'</'+tag+'>'; }).join("")+'</tr>').join("")+'</table>').join("");
+  const html = '<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>'+esc(rep.title)+'</title><style>body{font-family:Arial,sans-serif;color:#0E1B24;margin:18px;font-size:11px}h1{font-size:18px;color:#004D77;margin:0 0 4px}h2{font-size:13px;margin:16px 0 6px;color:#004D77}.sub{color:#667889;margin-bottom:8px}table{border-collapse:collapse;width:100%;margin-bottom:6px}td,th{border:1px solid #C9D5DF;padding:3px 6px;text-align:left;vertical-align:top}th{background:#EBF2F7}td.n{text-align:right}@page{size:A4 landscape;margin:10mm}</style></head><body><h1>'+esc(rep.title)+'</h1><div class="sub">Сформировано '+esc(new Date().toLocaleString("ru-RU"))+'</div>'+tables+'</body></html>';
+  const fr = document.createElement("iframe"); fr.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+  document.body.appendChild(fr);
+  const doc = fr.contentWindow.document; doc.open(); doc.write(html); doc.close();
+  setTimeout(()=>{ try { fr.contentWindow.focus(); fr.contentWindow.print(); } catch(e){ mainToast("Печать недоступна в этом браузере"); } setTimeout(()=>fr.remove(), 60000); }, 300);
+}
+function reportPanelHtml(){
+  return '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div><p class="panel-title" style="margin-bottom:2px">Отчёт за месяц</p><p class="panel-sub" style="margin:0">Итоги, локации, архив и комментарии руководителя.</p></div>'+
+    '<div class="adm-actions"><button class="btn btn-primary" onclick="reportExcel()">Скачать Excel</button><button class="btn" onclick="reportPdf()">PDF (печать)</button></div></div>'+
+    '<p class="panel-sub" style="margin:8px 0 0">PDF: в окне печати выберите принтер «Сохранить как PDF».</p></div>';
+}
+
+// ---------- обёртки основных экранов ----------
+const _renderDashboardTab = renderDashboardTab;
+renderDashboardTab = function(ctx){
+  const base = _renderDashboardTab(ctx);
+  if (ctx || !srvOn()) return base;
+  return statusPanelHtml() + signalsHtml() + base + compareHtml() + commentsHtml() + feedHtml() + reportPanelHtml();
+};
+const _closeMonth = closeMonth;
+closeMonth = function(){
+  if (srvOn()) {
+    const miss = []; STATUS_DEFS.forEach(df=>df.kinds.forEach(([k,lb])=>{ if (!isReady(df.dept,k)) miss.push(df.label+" — "+lb.toLowerCase()); }));
+    const q = miss.length ? "Не подтвердили:\n• "+miss.join("\n• ")+"\n\nВсё равно закрыть месяц?" : "Закрыть месяц? Данные уйдут в архив, поля для заполнения обнулятся.";
+    if (!confirm(q)) return;
+  }
+  return _closeMonth();
+};
+
+// ---------- администратор: e-mail, почта, копии ----------
+function fmtSize(n){ return n > 1048576 ? (n/1048576).toFixed(1)+" МБ" : Math.max(1,Math.round(n/1024))+" КБ"; }
+async function loadAdminExtras(){
+  try {
+    const m = await api("GET","/api/mail"); ONLINE.mailCfg = m.cfg; ONLINE.mailLog = m.log||[];
+    const b = await api("GET","/api/backups"); ONLINE.backups = b.list||[];
+    if (state.tab==="admin") scheduleRender();
+  } catch(e){}
+}
+async function mailSave(){
+  const g = id=>document.getElementById(id), body = {
+    enabled:g("mc_enabled").checked, host:g("mc_host").value, port:g("mc_port").value, mode:g("mc_mode").value, user:g("mc_user").value, from:g("mc_from").value, siteUrl:g("mc_site").value,
+    evReady:g("mc_evReady").checked, evAll:g("mc_evAll").checked, evClosed:g("mc_evClosed").checked, evRemind:g("mc_evRemind").checked };
+  if (g("mc_pass").value) body.pass = g("mc_pass").value;
+  try { await api("PUT","/api/mail",body); adminMsg("Настройки почты сохранены."); loadAdminExtras(); } catch(e){ adminMsg("Не удалось сохранить: "+((e&&e.message)||e)); }
+}
+async function mailTest(){
+  const to = document.getElementById("mc_test").value.trim();
+  try { await mailSave(); await api("POST","/api/mail/test",{ to }); adminMsg("Тестовое письмо отправлено на "+to+"."); } catch(e){ adminMsg("Проверка не прошла: "+((e&&e.message)||e)); }
+  loadAdminExtras();
+}
+async function emailSave(id){
+  const v = document.getElementById("em_"+id).value.trim();
+  try { await api("PUT","/api/users/"+id,{ email:v }); adminMsg(v ? "Адрес сохранён." : "Адрес удалён."); } catch(e){ adminMsg("Не удалось сохранить адрес: "+((e&&e.message)||e)); }
+}
+async function backupNow(){ try { const r = await api("POST","/api/backups"); adminMsg("Копия создана: "+r.name); loadAdminExtras(); } catch(e){ adminMsg("Не удалось создать копию: "+((e&&e.message)||e)); } }
+async function backupRestore(name){
+  if (!confirm("Восстановить данные из копии "+name+"?\nТекущие данные будут заменены. Перед этим автоматически сохранится ещё одна копия (pre-restore).")) return;
+  try { await api("POST","/api/backups/"+name+"/restore"); } catch(e){ adminMsg("Не удалось восстановить: "+((e&&e.message)||e)); }
+}
+function adminExtraHtml(){
+  if (!srvOn()) return "";
+  const c = ONLINE.mailCfg;
+  const users = Object.keys(ONLINE.users).map(id=>({id, ...ONLINE.users[id]})).sort((a,b)=>a.name.localeCompare(b.name,"ru"));
+  const erows = users.map(u=>'<tr><td class="loc-name">'+esc(u.name)+'</td><td>'+esc(deptLabel(u.dept))+'</td><td><input class="fld" id="em_'+u.id+'" type="email" value="'+esc(u.email||"")+'" placeholder="name@company.ru"></td><td><button class="btn" onclick="emailSave(\''+u.id+'\')">Сохранить</button></td></tr>').join("");
+  const sel = (v)=>c && c.mode===v ? " selected" : "";
+  const chk = (k)=>c && c[k] ? " checked" : "";
+  const mailForm = !c ? '<p class="muted">Загрузка…</p>' :
+    '<div class="adm-form" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">'+
+    '<div><label class="auth-l" for="mc_host">Сервер исходящей почты</label><input class="fld" id="mc_host" value="'+esc(c.host)+'" placeholder="smtp.yandex.ru"></div>'+
+    '<div><label class="auth-l" for="mc_port">Порт</label><input class="fld" id="mc_port" value="'+esc(c.port)+'"></div>'+
+    '<div><label class="auth-l" for="mc_mode">Защита</label><select class="fld" id="mc_mode"><option value="ssl"'+sel("ssl")+'>SSL (порт 465)</option><option value="starttls"'+sel("starttls")+'>STARTTLS (порт 587)</option><option value="plain"'+sel("plain")+'>Без шифрования (25)</option></select></div>'+
+    '<div><label class="auth-l" for="mc_user">Логин почты</label><input class="fld" id="mc_user" value="'+esc(c.user)+'" autocomplete="off"></div>'+
+    '<div><label class="auth-l" for="mc_pass">Пароль '+(c.hasPass?'(сохранён, оставьте пустым)':'')+'</label><input class="fld" id="mc_pass" type="password" autocomplete="new-password"></div>'+
+    '<div><label class="auth-l" for="mc_from">От кого</label><input class="fld" id="mc_from" value="'+esc(c.from)+'" placeholder="Эвакуация КТК &lt;evac@company.ru&gt;"></div>'+
+    '<div><label class="auth-l" for="mc_site">Ссылка на сайт в письмах</label><input class="fld" id="mc_site" value="'+esc(c.siteUrl)+'" placeholder="http://79.174.83.208"></div></div>'+
+    '<div style="margin:12px 0;display:grid;gap:6px">'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_enabled"'+chk("enabled")+'> <b>Отправлять уведомления</b></label>'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evReady"'+chk("evReady")+'> Администратору: отдел нажал «Готово»</label>'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evAll"'+chk("evAll")+'> Администратору: все отделы подтвердили данные</label>'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evClosed"'+chk("evClosed")+'> Всем: месяц закрыт</label>'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evRemind"'+chk("evRemind")+'> Отделам: напоминание за день до срока и в день срока (в 9:00 по Москве)</label></div>'+
+    '<div class="adm-actions"><button class="btn btn-primary" onclick="mailSave()">Сохранить</button> <input class="fld fld-sm" id="mc_test" type="email" placeholder="e-mail для проверки"> <button class="btn" onclick="mailTest()">Отправить тест</button></div>'+
+    ((ONLINE.mailLog||[]).length ? '<table style="margin-top:12px"><thead><tr><th>Когда</th><th>Кому</th><th>Тема</th><th>Результат</th></tr></thead><tbody>'+ONLINE.mailLog.slice(0,8).map(m=>'<tr><td>'+fmtTime(m.t)+'</td><td>'+esc(m.to)+'</td><td>'+esc(m.s)+'</td><td>'+(m.ok?'отправлено':'<span style="color:var(--danger)">'+esc(m.err||"ошибка")+'</span>')+'</td></tr>').join("")+'</tbody></table>' : '');
+  const brows = (ONLINE.backups||[]).slice(0,20).map(b=>'<tr><td>'+fmtTime(b.t)+'</td><td class="mono">'+esc(b.name)+'</td><td>'+fmtSize(b.size)+'</td><td><a class="btn" href="/api/backups/'+encodeURIComponent(b.name)+'" download>Скачать</a> <button class="btn btn-danger" onclick="backupRestore(\''+b.name+'\')">Восстановить</button></td></tr>').join("")
+    || '<tr><td colspan="4" class="muted">Копий пока нет, первая появится в течение 10 минут.</td></tr>';
+  return '<div class="panel"><p class="panel-title">Почта и уведомления</p>'+expl('сюда вводится почтовый ящик, с которого сервер отправляет письма. Ящик для робота лучше завести отдельный.','Узнайте у айтишников адрес SMTP-сервера и пароль приложения. Примеры: Яндекс smtp.yandex.ru, порт 465, SSL; Mail.ru smtp.mail.ru, порт 465, SSL. Пароль хранится на сервере и обратно в браузер не передаётся.')+mailForm+'</div>'+
+    '<div class="panel"><p class="panel-title">Адреса сотрудников для писем</p>'+expl('куда отправлять уведомления конкретному человеку.','У кого адрес не указан, письма не получает. Администратору нужен адрес, чтобы приходили сообщения «отдел готов».')+
+    '<div style="overflow-x:auto"><table><thead><tr><th>Имя</th><th>Департамент</th><th>E-mail</th><th></th></tr></thead><tbody>'+erows+'</tbody></table></div></div>'+
+    '<div class="panel"><p class="panel-title">Автоматические копии на сервере</p>'+expl('сервер сам сохраняет копию всех данных раз в сутки и хранит 30 последних.','«Восстановить» возвращает данные на момент копии. Пароли пользователей при этом не меняются. Перед восстановлением сервер сам делает ещё одну копию, поэтому ошибку можно отыграть назад.')+
+    '<div class="adm-actions" style="margin-bottom:10px"><button class="btn btn-primary" onclick="backupNow()">Создать копию сейчас</button></div>'+
+    '<div style="overflow-x:auto"><table><thead><tr><th>Когда</th><th>Файл</th><th>Размер</th><th></th></tr></thead><tbody>'+brows+'</tbody></table></div></div>';
+}
+const _renderAdminTab = renderAdminTab;
+renderAdminTab = function(){
+  const base = _renderAdminTab();
+  if (!base || !srvOn()) return base;
+  if (!ONLINE.admLoaded) { ONLINE.admLoaded = true; loadAdminExtras(); }
+  return base + adminExtraHtml();
+};
 
 render();
 </script></body></html>

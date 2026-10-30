@@ -3062,7 +3062,7 @@ function applyPerms(){
   document.querySelectorAll("#content button[onclick]").forEach(el=>{
     const m = (el.getAttribute("onclick")||"").match(/^(?:event\.stopPropagation\(\);\s*)?([A-Za-z]+)\(/);
     const a = m && BTN_AREAS[m[1]];
-    if (a && !canWriteArea(a)) { if (a==="meta"||a==="archive") el.hidden = true; else { el.disabled = true; el.classList.add("ro"); } }
+    if (a && !canWriteArea(a)) { if (a==="meta"||a==="archive") { el.hidden = true; el.style.setProperty("display","none","important"); } else { el.disabled = true; el.classList.add("ro"); } }
   });
 }
 

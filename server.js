@@ -81,7 +81,7 @@ const AREA_KIND = {
   plan_export: { dept: "export", kind: "plan" }, fact_export: { dept: "export", kind: "fact" },
   import: { dept: "import", kind: "import" }, routes: { dept: "rail", kind: "rail" },
 };
-const STATUS_KINDS = { vnutriros: ["plan", "fact"], export: ["plan", "fact"], expl: ["plan"], import: ["import"], rail: ["rail", "railfact"] };
+const STATUS_KINDS = { vnutriros: ["plan", "fact"], export: ["plan", "fact"], expl: ["plan", "fact"], import: ["import"], rail: ["rail", "railfact"] };
 const KIND_LABEL = { plan: "план", fact: "факт", import: "сдача импорта", rail: "поезда: ТЕУ, план, доли", railfact: "поезда: факт" };
 const DEPT_LABEL = { vnutriros: "Внутрироссийский", export: "Экспортный", expl: "Эксплуатация", import: "Импорт", rail: "ЖД отдел", viewer: "Отчётность", manager: "Руководитель", admin: "Администратор" };
 function mskToday() { return new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10); }
@@ -246,7 +246,7 @@ function remindersCheck() {
   const today = mskToday(), tomorrow = new Date(Date.now() + 3 * 3600000 + 86400000).toISOString().slice(0, 10);
   let dirty = false;
   for (const dept of Object.keys(STATUS_KINDS)) for (const kind of STATUS_KINDS[dept]) {
-    const d = ext.deadlines[kind === "railfact" ? "rail" : kind]; if (!d || (d !== today && d !== tomorrow)) continue;
+    const d = ext.deadlines[kind === "railfact" ? "fact" : kind]; if (!d || (d !== today && d !== tomorrow)) continue;
     const st = ext.status[dept] && ext.status[dept][kind]; if (st && st.ready && !st.dirty) continue;
     const key = dept + "|" + kind + "|" + d + "|" + today; if (ext.reminded[key]) continue;
     ext.reminded[key] = 1; dirty = true;

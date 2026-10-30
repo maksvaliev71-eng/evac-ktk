@@ -3303,7 +3303,7 @@ const MANAGER = { key:"manager", label:"Руководитель (просмот
 const STATUS_DEFS = [
   { dept:"vnutriros", label:"Внутрироссийский", kinds:[["plan","План"],["fact","Факт"]] },
   { dept:"export",    label:"Экспортный",       kinds:[["plan","План"],["fact","Факт"]] },
-  { dept:"expl",      label:"Эксплуатация",     kinds:[["plan","План"]] },
+  { dept:"expl",      label:"Эксплуатация",     kinds:[["plan","План"],["fact","Факт"]] },
   { dept:"import",    label:"Импорт",           kinds:[["import","Сдача импорта"]] },
   { dept:"rail",      label:"ЖД отдел",         kinds:[["rail","Поезда: ТЕУ, план, доли"],["railfact","Поезда: факт"]] },
 ];
@@ -3311,7 +3311,7 @@ const KIND_TITLE = { plan:"план", fact:"факт", import:"сдача имп
 const AREA_TO_KIND_UNUSED = null; const AREA_TO_KIND = { plan_vnutriros:"plan", plan_export:"plan", fact_vnutriros:"fact", fact_export:"fact", import:"import", routes:"rail" };
 
 function fmtDM(d){ const m = String(d||"").match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? m[3]+"."+m[2] : ""; }
-function deadlineOf(kind){ return (ONLINE.ext.deadlines||{})[kind==="railfact"?"rail":kind] || ""; }
+function deadlineOf(kind){ return (ONLINE.ext.deadlines||{})[kind==="railfact"?"fact":kind] || ""; }
 function deadlineLockedClient(kind){ const d = deadlineOf(kind); return !!d && Date.now() > Date.parse(d+"T23:59:59+03:00"); }
 function daysLeft(d){ return Math.floor((Date.parse(d+"T23:59:59+03:00") - Date.now()) / 86400000); }
 function statusOf(dept, kind){ const s = (ONLINE.ext.status||{}); return (s[dept] && s[dept][kind]) || null; }
@@ -3628,7 +3628,6 @@ async function mailSave(quiet){
 }
 async function mailTest(){
   const to = document.getElementById("mc_test").value.trim();
-  ONLINE.mailMsg = { ok:true, text:"Отправляю тестовое письмо…" }; render();
   try { await mailSave(true); await api("POST","/api/mail/test",{ to }); ONLINE.mailMsg = { ok:true, text:"Тестовое письмо отправлено на "+to+". Проверьте почту, а также папку «Спам»." }; }
   catch(e){ ONLINE.mailMsg = { ok:false, text:"Не получилось: "+((e&&e.message)||e) }; }
   await loadAdminExtras(); render();

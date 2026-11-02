@@ -32,7 +32,7 @@ let logs = readJson(LOG_F, []);
 const EXT_F = path.join(DATA_DIR, "ext.json"), MAIL_F = path.join(DATA_DIR, "mail.json"), BK_DIR = path.join(DATA_DIR, "backups");
 let ext = readJson(EXT_F, {});          // статусы готовности, сроки, комментарии
 ext.status = ext.status || {}; ext.deadlines = ext.deadlines || {}; ext.comments = ext.comments || []; ext.reminded = ext.reminded || {};
-const MAIL_DEF = { enabled: false, mode: "ssl", host: "", port: 465, user: "", pass: "", from: "", siteUrl: "", evReady: true, evAll: true, evClosed: true, evRemind: true };
+const MAIL_DEF = { enabled: false, mode: "ssl", host: "", port: 465, user: "", pass: "", from: "", siteUrl: "", evReady: true, evAll: true, evClosed: true, evRemind: true, evWeekly: true, evCloseRpt: true };
 let mailCfg = Object.assign({}, MAIL_DEF, readJson(MAIL_F, {}));
 const HIST_F = path.join(DATA_DIR, "history.jsonl");
 let history = [];   // последние правки по ячейкам: {t,u,n,d,doc,p,f,v}
@@ -144,7 +144,7 @@ function recordHistory(me, doc, before, after) {
 const mailLog = [];
 function b64(str) { return Buffer.from(String(str), "utf8").toString("base64"); }
 function addrOnly(a) { const m = String(a).match(/<([^>]+)>/); return (m ? m[1] : String(a)).trim(); }
-function smtpSend(cfg, rcpts, subject, text) {
+function smtpSend(cfg, rcpts, subject, text, html) {
   return new Promise((resolve, reject) => {
     let sock, buf = "", lines = [], queue = [], waiter = null, finished = false;
     const fail = e => { if (finished) return; finished = true; clearTimeout(timer); try { sock && sock.destroy(); } catch (x) {} reject(e instanceof Error ? e : new Error(String(e))); };
@@ -181,8 +181,11 @@ function smtpSend(cfg, rcpts, subject, text) {
       for (const r of rcpts) await cmd("RCPT TO:<" + addrOnly(r) + ">", [250, 251]);
       await cmd("DATA", [354]);
       const hdr = ["From: " + from, "To: " + rcpts.join(", "), "Subject: =?UTF-8?B?" + b64(subject) + "?=", "Date: " + new Date().toUTCString(),
-        "Message-ID: <" + crypto.randomBytes(8).toString("hex") + "@evac.local>", "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64"].join("\r\n");
-      const body = b64(text).replace(/.{1,76}/g, "$&\r\n");
+        "Message-ID: <" + crypto.randomBytes(8).toString("hex") + "@evac.local>", "MIME-Version: 1.0"].concat(html ? ["Content-Type: multipart/alternative; boundary=\"evacB\""] : ["Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64"]).join("\r\n");
+      const wrap = t => b64(t).replace(/.{1,76}/g, "$&\r\n");
+      const body = html
+        ? "--evacB\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + wrap(text) + "--evacB\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + wrap(html) + "--evacB--\r\n"
+        : wrap(text);
       sock.write(hdr + "\r\n\r\n" + body + ".\r\n");
       const d = await read(); if (d.code !== 250) throw new Error("Почтовый сервер не принял письмо: " + d.text.slice(0, 200));
       try { sock.write("QUIT\r\n"); } catch (x) {}
@@ -200,11 +203,12 @@ function mailErrText(e) {
   return m;
 }
 let mailChain = Promise.resolve();
-function sendMail(rcpts, subject, text) {
+function sendMail(rcpts, subject, text, html) {
   rcpts = [...new Set(rcpts.filter(Boolean))];
   if (!mailCfg.enabled || !mailCfg.host || !rcpts.length) return mailChain;
   const full = (mailCfg.siteUrl ? text + "\n\n" + mailCfg.siteUrl : text);
-  mailChain = mailChain.then(() => smtpSend(mailCfg, rcpts, "[Эвакуация КТК] " + subject, full)
+  const fullHtml = html ? (mailCfg.siteUrl ? html + '<p style="font:13px Arial;color:#667"><a href="' + escH(mailCfg.siteUrl) + '">' + escH(mailCfg.siteUrl) + "</a></p>" : html) : null;
+  mailChain = mailChain.then(() => smtpSend(mailCfg, rcpts, "[Эвакуация КТК] " + subject, full, fullHtml)
     .then(() => { mailLog.unshift({ t: Date.now(), to: rcpts.join(", "), s: subject, ok: true }); })
     .catch(e => { mailLog.unshift({ t: Date.now(), to: rcpts.join(", "), s: subject, ok: false, err: mailErrText(e) }); }))
     .then(() => { mailLog.length = Math.min(mailLog.length, 30); });
@@ -214,6 +218,65 @@ function emailsOf(pred) { return Object.values(users).filter(u => u.email && pre
 const mailAdmins = (subj, text) => sendMail(emailsOf(u => u.dept === "admin"), subj, text);
 const mailAll = (subj, text) => sendMail(emailsOf(() => true), subj, text);
 const mailDept = (dept, subj, text) => sendMail(emailsOf(u => u.dept === dept), subj, text);
+
+// ---------- отчёты по почте ----------
+function escH(v) { return String(v == null ? "" : v).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+const nf = n => Math.round(Number(n) || 0).toLocaleString("ru-RU").replace(/\u00a0/g, " ");
+const pc = (f, p) => (p > 0 ? Math.round((f / p) * 100) + "%" : "—");
+const DIR_NAMES = { vnutriros: "Внутрироссийский", export: "Экспортный", expl: "Эксплуатация" };
+const TH = "padding:6px 10px;background:#E8EEF3;text-align:left;font-weight:bold;border:1px solid #D5DDE5", TD = "padding:6px 10px;border:1px solid #D5DDE5";
+function tbl(head, rows) {
+  return '<table style="border-collapse:collapse;font:13px Arial;margin:6px 0 16px"><tr>' + head.map((h, i) => '<th style="' + TH + (i ? ";text-align:right" : "") + '">' + escH(h) + "</th>").join("") + "</tr>" +
+    rows.map(r => "<tr>" + r.map((c, i) => '<td style="' + TD + (i ? ";text-align:right" : "") + '">' + escH(c) + "</td>").join("") + "</tr>").join("") + "</table>";
+}
+function wrapHtml(title, inner) { return '<div style="font:14px Arial;color:#1B2A38;max-width:760px"><h2 style="margin:0 0 4px;font:bold 18px Arial;color:#004D77">' + escH(title) + "</h2>" + inner + "</div>"; }
+function h3(t) { return '<h3 style="font:bold 14px Arial;margin:14px 0 2px">' + escH(t) + "</h3>"; }
+function summaryParts(label, totalVolume, totalPlan, totalFact, planByDir, factByDir, railP, railF) {
+  let txt = label + "\nОбъём к эвакуации: " + nf(totalVolume) + "\nПлан: " + nf(totalPlan) + "\nФакт: " + nf(totalFact) + " (" + pc(totalFact, totalPlan) + ")\n";
+  const rows = Object.keys(DIR_NAMES).map(k => { txt += DIR_NAMES[k] + ": план " + nf((planByDir || {})[k]) + ", факт " + nf((factByDir || {})[k]) + " (" + pc((factByDir || {})[k], (planByDir || {})[k]) + ")\n"; return [DIR_NAMES[k], nf((planByDir || {})[k]), nf((factByDir || {})[k]), pc((factByDir || {})[k], (planByDir || {})[k])]; });
+  rows.push(["Всего", nf(totalPlan), nf(totalFact), pc(totalFact, totalPlan)]);
+  let html = tbl(["Объём к эвакуации, шт", "План, шт", "Факт, шт", "Выполнение"], [[nf(totalVolume), nf(totalPlan), nf(totalFact), pc(totalFact, totalPlan)]]) + h3("По департаментам") + tbl(["Департамент", "План, шт", "Факт, шт", "Выполнение"], rows);
+  if (railP || railF) { html += h3("Поезда") + tbl(["", "План, шт", "Факт, шт", "Выполнение"], [["Поезда", nf(railP), nf(railF), pc(railF, railP)]]); txt += "Поезда: план " + nf(railP) + ", факт " + nf(railF) + "\n"; }
+  return { txt, html };
+}
+function weeklyReport() {
+  const sn = ext.snap; if (!sn) return null;
+  const sp = summaryParts(sn.label, sn.totalVolume, sn.totalPlan, sn.totalFact, sn.planByDir, sn.factByDir, sn.rail && sn.rail.plan, sn.rail && sn.rail.fact);
+  let html = '<p style="margin:0 0 8px;color:#556">Данные на ' + escH(new Date(sn.t + 10 * 3600000).toISOString().slice(0, 16).replace("T", " ")) + " (владивостокское время)</p>" + sp.html, txt = "Недельный отчёт — " + sp.txt;
+  const locs = (sn.locs || []).filter(l => l.p > 0).map(l => Object.assign({ gap: l.p - l.f }, l)).sort((a, b) => b.gap - a.gap).slice(0, 10);
+  if (locs.length) { html += h3("Локации с наибольшим отставанием от плана") + tbl(["Локация", "План, шт", "Факт, шт", "Выполнение", "Не довезено, шт"], locs.map(l => [l.n, nf(l.p), nf(l.f), pc(l.f, l.p), nf(Math.max(0, l.gap))])); }
+  const rows = []; let notReady = 0;
+  for (const d of Object.keys(STATUS_KINDS)) for (const k of STATUS_KINDS[d]) {
+    const st = ext.status[d] && ext.status[d][k], ok = st && st.ready && !st.dirty; if (!ok) notReady++;
+    const dl = ext.deadlines[k === "railfact" ? "fact" : k];
+    rows.push([DEPT_LABEL[d] + " — " + KIND_LABEL[k], ok ? "готово" : (st && st.ready ? "изменено после подтверждения" : "ждём"), dl ? fmtDate(dl) : "—"]);
+  }
+  html += h3("Готовность данных (не подтверждено: " + notReady + ")") + tbl(["Что", "Статус", "Срок"], rows).replace(/text-align:right/g, "text-align:left");
+  txt += "Не подтверждено разделов: " + notReady + "\n";
+  return { subject: "Недельный отчёт — " + sn.label, text: txt, html: wrapHtml("Недельный отчёт: " + sn.label, html) };
+}
+function closeReport() {
+  const ids = Object.keys(appDocs).filter(k => /^a\d{3}$/.test(k)).sort(); if (!ids.length) return null;
+  const a = appDocs[ids[ids.length - 1]], names = (ext.snap && ext.snap.names) || {};
+  let rp = 0, rf = 0;
+  if (a.routes) Object.values(a.routes).forEach(r => { rp += (r && r.plan) || 0; rf += (r && r.fact) || 0; }); else { rp = a.routesPlan || 0; rf = a.routesFact || 0; }
+  const label = (a.label || "") + " " + (a.year || "");
+  const sp = summaryParts(label.trim(), a.totalVolume, a.totalPlan, a.totalFact, a.planByDir, a.factByDir, rp, rf);
+  let html = sp.html, txt = "Отчёт по закрытию месяца — " + sp.txt;
+  const rs = [];
+  Object.keys(a.reasons || {}).forEach(d => Object.keys(a.reasons[d] || {}).forEach(l => { const t = a.reasons[d][l]; if (t) rs.push([DIR_NAMES[d] || d, names[l] || l, t]); }));
+  if (rs.length) { html += h3("Причины невыполнения плана") + tbl(["Департамент", "Локация", "Причина"], rs).replace(/text-align:right/g, "text-align:left"); txt += "\nПричины невыполнения:\n" + rs.map(r => "- " + r.join(" / ")).join("\n") + "\n"; }
+  return { subject: "Месяц закрыт — отчёт: " + label.trim(), text: txt, html: wrapHtml("Отчёт по закрытию месяца: " + label.trim(), html) };
+}
+const reportRcpts = () => emailsOf(u => u.dept === "admin" || u.dept === "manager" || u.dept === "viewer");
+function sendReport(r) { if (r) return sendMail(reportRcpts(), r.subject, r.text, r.html); return Promise.resolve(); }
+function weeklyCheck() {
+  if (!mailCfg.enabled || !mailCfg.evWeekly) return;
+  const msk = new Date(Date.now() + 3 * 3600000), today = mskToday();
+  if (msk.getUTCDay() !== 1 || msk.getUTCHours() < 9 || ext.lastWeekly === today) return;
+  const r = weeklyReport(); if (!r) return;
+  ext.lastWeekly = today; writeJson(EXT_F, ext); sendReport(r);
+}
 
 // ---------- автоматические резервные копии ----------
 function backupList() {
@@ -409,6 +472,7 @@ const server = http.createServer(async (req, res) => {
         }
         if (id === "meta" && oldCursor !== undefined && b.monthCursor !== oldCursor) {
           ext.status = {}; ext.deadlines = {}; ext.reminded = {}; saveExt();
+          if (mailCfg.enabled && mailCfg.evCloseRpt) setTimeout(() => { try { sendReport(closeReport()); } catch (e) { console.error("closeReport:", e.message); } }, 20000);
           if (mailCfg.evClosed) mailAll("Месяц закрыт", "Администратор закрыл месяц и открыл новый. Данные для заполнения обнулены. Сроки нужно задать заново.");
         }
         return send(res, 200, { ok: true });
@@ -418,6 +482,14 @@ const server = http.createServer(async (req, res) => {
         delete appDocs[id]; try { fs.unlinkSync(path.join(APP_DIR, id + ".json")); } catch (e) {}
         broadcast("app", { id, data: null }); return send(res, 200, { ok: true });
       }
+    }
+    if (p === "/api/snap" && req.method === "POST") {
+      if (["viewer", "manager"].includes(me.dept)) return send(res, 403, { error: "Нет прав" });
+      const b = await readBody(req, 60000), N = v => Math.round(Number(v) || 0), S = v => String(v == null ? "" : v).slice(0, 80);
+      const dirs = o => { const r = {}; Object.keys(DIR_NAMES).forEach(k => { r[k] = N(o && o[k]); }); return r; };
+      const names = {}, locs = (Array.isArray(b.locs) ? b.locs : []).slice(0, 100).map(l => { names[S(l.id)] = S(l.n); return { id: S(l.id), n: S(l.n), p: N(l.p), f: N(l.f) }; });
+      ext.snap = { t: Date.now(), label: S(b.label), totalVolume: N(b.totalVolume), totalPlan: N(b.totalPlan), totalFact: N(b.totalFact), planByDir: dirs(b.planByDir), factByDir: dirs(b.factByDir), rail: { plan: N(b.rail && b.rail.plan), fact: N(b.rail && b.rail.fact) }, locs, names };
+      writeJson(EXT_F, ext); return send(res, 200, { ok: true });
     }
     // ---- только администратор ----
     if (me.dept !== "admin") return send(res, 403, { error: "Только администратор" });
@@ -475,8 +547,16 @@ const server = http.createServer(async (req, res) => {
       if (b.pass) n.pass = String(b.pass).slice(0, 200);
       if (b.port !== undefined) n.port = parseInt(b.port, 10) || 0;
       if (["ssl", "starttls", "plain"].includes(b.mode)) n.mode = b.mode;
-      for (const k of ["enabled", "evReady", "evAll", "evClosed", "evRemind"]) if (b[k] !== undefined) n[k] = !!b[k];
+      for (const k of ["enabled", "evReady", "evAll", "evClosed", "evRemind", "evWeekly", "evCloseRpt"]) if (b[k] !== undefined) n[k] = !!b[k];
       mailCfg = n; writeJson(MAIL_F, mailCfg); return send(res, 200, { ok: true });
+    }
+    if (p === "/api/mail/report" && req.method === "POST") {
+      if (me.dept !== "admin") return send(res, 403, { error: "Только администратор" });
+      const b = await readBody(req, 2000), r = b.type === "close" ? closeReport() : weeklyReport();
+      if (!r) return send(res, 400, { error: b.type === "close" ? "Нет закрытых месяцев в архиве" : "Пока нет данных для отчёта: внесите или измените любое значение в данных" });
+      const to = reportRcpts(); if (!to.length) return send(res, 400, { error: "Не заполнен ни один адрес у администратора, руководителя или отчётности" });
+      if (!mailCfg.enabled) return send(res, 400, { error: "Отправка уведомлений выключена" });
+      await sendReport(r); const l = mailLog[0]; return l && !l.ok ? send(res, 400, { error: l.err }) : send(res, 200, { ok: true, to });
     }
     if (p === "/api/mail/test" && req.method === "POST") {
       const b = await readBody(req, 2000), to = String(b.to || "").trim();
@@ -503,6 +583,6 @@ const server = http.createServer(async (req, res) => {
     return send(res, 400, { error: e.message || "Ошибка запроса" });
   }
 });
-setInterval(() => { dailyBackup(); remindersCheck(); }, 10 * 60 * 1000);
+setInterval(() => { dailyBackup(); remindersCheck(); weeklyCheck(); }, 10 * 60 * 1000);
 setTimeout(() => { dailyBackup(); remindersCheck(); }, 5000);
 server.listen(PORT, () => console.log("Эвакуация КТК: http://localhost:" + PORT + "  (данные: " + DATA_DIR + ")"));

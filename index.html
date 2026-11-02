@@ -2640,6 +2640,7 @@ function render(){
     { key: "archive", label: "Архив" },
     { key: "drops", label: "Дроп-офф" },
   ];
+  if (typeof ONLINE!=="undefined" && ONLINE.me && typeof nextTabVisible==="function" && nextTabVisible()) tabsDef.push({ key: "next", label: "Следующий месяц" });
   if (typeof ONLINE!=="undefined" && ONLINE.isAdmin) tabsDef.push({ key: "admin", label: "Админ" }); else if (typeof ONLINE!=="undefined" && ONLINE.me && ONLINE.me.dept==="manager") tabsDef.push({ key: "admin", label: "Комментарии" });
   document.getElementById("tabs").innerHTML = tabsDef.map(t=>
     '<div class="tab '+(state.tab===t.key?"active":"")+'" onclick="setTab(\''+t.key+'\')">'+t.label+'</div>'
@@ -2654,6 +2655,7 @@ function render(){
   else if (state.tab==="dashboard") html = renderDashboardTab();
   else if (state.tab==="forecast") html = renderForecastTab();
   else if (state.tab==="archive") html = renderArchiveTab();
+  else if (state.tab==="next") html = (typeof renderNextTab==="function") ? renderNextTab() : "";
   else if (state.tab==="admin") html = (typeof renderAdminTab==="function") ? renderAdminTab() : "";
   else if (state.tab==="drops") html = '<iframe id="dropsFrame" title="Ставки дроп-офф" style="width:100%;border:0;display:block;height:640px;background:transparent"></iframe>';
   document.getElementById("content").innerHTML = html;
@@ -2720,6 +2722,7 @@ const AREAS = [
   { id:"inputs",         label:"Сток, нормы, % сдачи, % ремонта, срок ремонта" },
   { id:"shares",         label:"Доли автодобора по департаментам" },
   { id:"forecast",       label:"Прогноз: ожидаемый подход" },
+  { id:"next",           label:"Следующий месяц: сток, нормы, план" },
 ];
 const DEFAULT_PERMS = {
   vnutriros:["plan_vnutriros","fact_vnutriros"],
@@ -2728,7 +2731,7 @@ const DEFAULT_PERMS = {
   rail:["routes"],
 };
 const IMP_FIELDS = ["imp20","imp40","impF20","impF40"];
-const META_EXCL = new Set(["reasons","tab","forecastView","inputs","routes","plan","fact","distributionShares","capacitySelection","capacityTeu","planningHorizon","forecastLog","forecastInflow","archive"]);
+const META_EXCL = new Set(["reasons","tab","forecastView","inputs","routes","plan","fact","distributionShares","capacitySelection","capacityTeu","planningHorizon","forecastLog","forecastInflow","archive","next"]);
 
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function clone(o){ return JSON.parse(JSON.stringify(o)); }
@@ -2757,6 +2760,7 @@ function docsFromState(){
   d.shares = state.distributionShares;
   d.trainsCfg = { capacitySelection: state.capacitySelection, capacityTeu: state.capacityTeu, planningHorizon: state.planningHorizon };
   d.forecast = { log: state.forecastLog || [], inflow: state.forecastInflow };
+  d.next = state.next || {};
   const meta = {}; Object.keys(state).forEach(k=>{ if(!META_EXCL.has(k)) meta[k]=state[k]; });
   d.meta = meta;
   (state.archive||[]).forEach((a,i)=>{ d["a"+String(i).padStart(3,"0")] = a; });
@@ -2780,6 +2784,7 @@ function applyDocs(map){
     });
     if (map["reasons_"+dir.key]) { state.reasons = state.reasons || {}; state.reasons[dir.key] = clone(map["reasons_"+dir.key]); }
   });
+  if (map.next) state.next = clone(map.next);
   if (map.shares) state.distributionShares = clone(map.shares);
   if (map.trainsCfg) { ["capacitySelection","capacityTeu","planningHorizon"].forEach(k=>{ if(map.trainsCfg[k]) state[k]=clone(map.trainsCfg[k]); }); }
   if (map.forecast) { if (map.forecast.log) state.forecastLog = clone(map.forecast.log); if (map.forecast.inflow) state.forecastInflow = clone(map.forecast.inflow); }
@@ -3602,6 +3607,7 @@ closeMonth = function(){
   let q = miss.length ? "Не подтвердили:\n• "+miss.join("\n• ")+"\n\n" : "";
   if (nr) q += "Не указаны причины невыполнения плана: "+nr+".\n\n";
   q += q ? "Всё равно закрыть месяц?" : "Закрыть месяц? Данные уйдут в архив, поля для заполнения обнулятся.";
+  if (nextHasData()) q += "\n\nДанные со вкладки «Следующий месяц» (сток, нормы, план) попадут в новый месяц автоматически.";
   if (!confirm(q)) return;
   const rs = clone(state.reasons || {}), n0 = state.archive.length;
   _closeMonth();
@@ -3622,10 +3628,26 @@ async function loadAdminExtras(){
 async function mailSave(quiet){
   const g = id=>document.getElementById(id), body = {
     enabled:g("mc_enabled").checked, host:g("mc_host").value, port:g("mc_port").value, mode:g("mc_mode").value, user:g("mc_user").value, from:g("mc_from").value, siteUrl:g("mc_site").value,
-    evReady:g("mc_evReady").checked, evAll:g("mc_evAll").checked, evClosed:g("mc_evClosed").checked, evRemind:g("mc_evRemind").checked };
+    evReady:g("mc_evReady").checked, evAll:g("mc_evAll").checked, evClosed:g("mc_evClosed").checked, evRemind:g("mc_evRemind").checked, evWeekly:g("mc_evWeekly").checked, evCloseRpt:g("mc_evCloseRpt").checked };
   if (g("mc_pass").value) body.pass = g("mc_pass").value;
   try { await api("PUT","/api/mail",body); if (!quiet) { ONLINE.mailMsg = { ok:true, text:"Настройки почты сохранены." }; await loadAdminExtras(); render(); } } catch(e){ ONLINE.mailMsg = { ok:false, text:"Не удалось сохранить: "+((e&&e.message)||e) }; if (quiet) throw e; render(); }
 }
+async function mailReportNow(type){
+  try { await mailSave(true); const r = await api("POST","/api/mail/report",{ type }); ONLINE.mailMsg = { ok:true, text:"Отчёт отправлен: "+((r&&r.to)||[]).join(", ") }; }
+  catch(e){ ONLINE.mailMsg = { ok:false, text:"Не получилось: "+((e&&e.message)||e) }; }
+  await loadAdminExtras(); render();
+}
+let _snapT = null;
+function snapSoon(){ clearTimeout(_snapT); _snapT = setTimeout(snapPush, 4000); }
+async function snapPush(){
+  try {
+    if (!ONLINE.server || !ONLINE.me || ["viewer","manager"].includes(ONLINE.me.dept)) return;
+    const t = totalsFullCtx(state.inputs, state.plan, state.fact), rt = routesTotals(state.routes);
+    const locs = LOCATIONS.map(l=>{ let p=0, f=0; DIRECTIONS.forEach(d=>{ p += finalPlanForCtx(state.inputs,state.plan,l.id,d.key); f += factCountForCtx(state.fact,l.id,d.key); }); return { id:l.id, n:l.name, p, f }; });
+    await api("POST","/api/snap",{ label: MONTH_NAMES[state.monthCursor%12]+" "+(state.currentYear||""), totalVolume:t.totalVolume, totalPlan:t.totalPlan, totalFact:t.totalFact, planByDir:t.planByDir, factByDir:t.factByDir, rail:rt, locs });
+  } catch(e){}
+}
+if (typeof syncPersist==="function") { const _sp0 = syncPersist; syncPersist = function(){ const r = _sp0.apply(this, arguments); snapSoon(); return r; }; }
 async function mailTest(){
   const to = document.getElementById("mc_test").value.trim();
   try { await mailSave(true); await api("POST","/api/mail/test",{ to }); ONLINE.mailMsg = { ok:true, text:"Тестовое письмо отправлено на "+to+". Проверьте почту, а также папку «Спам»." }; }
@@ -3669,8 +3691,10 @@ function adminExtraHtml(){
     '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evReady"'+chk("evReady")+'> Администратору: отдел нажал «Готово»</label>'+
     '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evAll"'+chk("evAll")+'> Администратору: все отделы подтвердили данные</label>'+
     '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evClosed"'+chk("evClosed")+'> Всем: месяц закрыт</label>'+
-    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evRemind"'+chk("evRemind")+'> Отделам: напоминание за день до срока и в день срока (в 9:00 по Москве)</label></div>'+
-    (ONLINE.mailMsg ? '<div class="adm-warn" style="margin:0 0 10px;'+(ONLINE.mailMsg.ok?'':'background:#FBECEC;border-color:#E3A9AA')+'">'+esc(ONLINE.mailMsg.text)+'</div>' : '')+'<div class="adm-actions"><button class="btn btn-primary" onclick="mailSave()">Сохранить</button> <input class="fld fld-sm" id="mc_test" type="email" placeholder="e-mail для проверки"> <button class="btn" onclick="mailTest()">Отправить тест</button></div>'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evRemind"'+chk("evRemind")+'> Отделам: напоминание за день до срока и в день срока (в 9:00 по Москве)</label>'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evWeekly"'+chk("evWeekly")+'> Недельный отчёт: каждый понедельник в 9:00 по Москве (администратору, руководителю, отчётности)</label>'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evCloseRpt"'+chk("evCloseRpt")+'> Отчёт по закрытию месяца (администратору, руководителю, отчётности)</label></div>'+
+    (ONLINE.mailMsg ? '<div class="adm-warn" style="margin:0 0 10px;'+(ONLINE.mailMsg.ok?'':'background:#FBECEC;border-color:#E3A9AA')+'">'+esc(ONLINE.mailMsg.text)+'</div>' : '')+'<div class="adm-actions"><button class="btn btn-primary" onclick="mailSave()">Сохранить</button> <input class="fld fld-sm" id="mc_test" type="email" placeholder="e-mail для проверки"> <button class="btn" onclick="mailTest()">Отправить тест</button> <button class="btn" onclick="mailReportNow(\'weekly\')">Прислать недельный отчёт сейчас</button> <button class="btn" onclick="mailReportNow(\'close\')">Прислать отчёт последнего закрытого месяца</button></div>'+
     ((ONLINE.mailLog||[]).length ? '<table style="margin-top:12px"><thead><tr><th>Когда</th><th>Кому</th><th>Тема</th><th>Результат</th></tr></thead><tbody>'+ONLINE.mailLog.slice(0,8).map(m=>'<tr><td>'+fmtTime(m.t)+'</td><td>'+esc(m.to)+'</td><td>'+esc(m.s)+'</td><td>'+(m.ok?'отправлено':'<span style="color:var(--danger)">'+esc(m.err||"ошибка")+'</span>')+'</td></tr>').join("")+'</tbody></table>' : '');
   const brows = (ONLINE.backups||[]).slice(0,20).map(b=>'<tr><td>'+fmtTime(b.t)+'</td><td class="mono">'+esc(b.name)+'</td><td>'+fmtSize(b.size)+'</td><td><a class="btn" href="/api/backups/'+encodeURIComponent(b.name)+'" download>Скачать</a> <button class="btn btn-danger" onclick="backupRestore(\''+b.name+'\')">Восстановить</button></td></tr>').join("")
     || '<tr><td colspan="4" class="muted">Копий пока нет, первая появится в течение 10 минут.</td></tr>';
@@ -3942,6 +3966,55 @@ async function periodExcel(){
   } catch(e){ mainToast("Не получилось собрать отчёт: "+((e&&e.message)||e)); }
 }
 function periodPdf(){ try { printReport(periodData()); } catch(e){ mainToast("Не получилось собрать отчёт: "+((e&&e.message)||e)); } }
+
+
+// ---------- следующий месяц: черновик ----------
+const NEXT_INP = [["resource20","Сток 20'"],["resource40","Сток 40'"],["norm20","Норма 20'"],["norm40","Норма 40'"]];
+function nextTabVisible(){ const d = ONLINE.me && ONLINE.me.dept; return !!ONLINE.me && (ONLINE.isAdmin || d==="manager" || d==="viewer" || canWriteArea("next")); }
+function nextLabel(){ const c = state.monthCursor+1; return MONTH_NAMES[c%12]+" "+((state.currentYear||0)+(state.monthCursor%12===11?1:0)); }
+function nextGet(){ if (!state.next || typeof state.next!=="object" || Array.isArray(state.next)) state.next = {}; return state.next; }
+function nextHasData(){ const n = state.next; if (!n) return false; let any=false;
+  Object.values(n.inputs||{}).forEach(r=>Object.values(r||{}).forEach(v=>{ if (Number(v)) any=true; }));
+  Object.values(n.plan||{}).forEach(r=>Object.values(r||{}).forEach(d=>Object.values(d||{}).forEach(v=>{ if (Number(v)) any=true; })));
+  return any; }
+function nextSet(loc, grp, a, b, val){
+  const n = nextGet(), v = Math.max(0, Math.round(Number(String(val).replace(/[^0-9]/g,""))||0));
+  if (grp==="inputs") { n.inputs = n.inputs||{}; n.inputs[loc] = n.inputs[loc]||{}; n.inputs[loc][a] = v; }
+  else { n.plan = n.plan||{}; n.plan[loc] = n.plan[loc]||{}; n.plan[loc][a] = n.plan[loc][a]||{}; n.plan[loc][a][b] = v; }
+  persist();
+}
+function nextClear(){ if (!confirm("Очистить все данные следующего месяца?")) return; state.next = {}; saveAndRender(); }
+function nextCell(ro, loc, grp, a, b, v){
+  return '<input type="text" inputmode="numeric" class="fld fld-sm" style="width:78px;text-align:right" value="'+(Number(v)||0)+'"'+(ro?' disabled':'')+' onfocus="this.select()" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');nextSet(\''+loc+'\',\''+grp+'\',\''+a+'\',\''+(b||"")+'\',this.value)">';
+}
+function renderNextTab(){
+  const n = nextGet(), ro = !canWriteArea("next");
+  const head = '<tr><th rowspan="2">Локация</th><th colspan="4">Сток и нормы</th>'+DIRECTIONS.map(d=>'<th colspan="2">План: '+esc(d.label)+'</th>').join("")+'</tr>'+
+    '<tr>'+NEXT_INP.map(x=>'<th>'+x[1]+'</th>').join("")+DIRECTIONS.map(()=>'<th>20\'</th><th>40\'</th>').join("")+'</tr>';
+  const rows = LOCATIONS.map(l=>{
+    const i = (n.inputs&&n.inputs[l.id])||{}, p = (n.plan&&n.plan[l.id])||{};
+    return '<tr><td class="loc-name">'+esc(l.name)+'</td>'+NEXT_INP.map(x=>'<td>'+nextCell(ro,l.id,"inputs",x[0],"",i[x[0]])+'</td>').join("")+
+      DIRECTIONS.map(d=>{ const q = p[d.key]||{}; return '<td>'+nextCell(ro,l.id,"plan",d.key,"c20",q.c20)+'</td><td>'+nextCell(ro,l.id,"plan",d.key,"c40",q.c40)+'</td>'; }).join("")+'</tr>';
+  }).join("");
+  return '<div class="panel"><p class="panel-title">Следующий месяц: '+esc(nextLabel())+'</p>'+
+    expl('черновик цифр следующего месяца, которые уже известны. Текущий месяц при этом не закрывается и работает как обычно.','При нажатии «Закрыть месяц» эти цифры сами станут стоком, нормами и планом нового месяца, а черновик очистится. Вносится в штуках. Подход импорта, поезда и факт вносятся уже в новом месяце.')+
+    '<div style="overflow-x:auto"><table><thead>'+head+'</thead><tbody>'+rows+'</tbody></table></div>'+
+    (ro?'<p class="panel-sub">Только просмотр.</p>':'<div class="adm-actions" style="margin-top:12px"><button class="btn btn-danger" onclick="nextClear()">Очистить черновик</button></div>')+'</div>';
+}
+const _closeMonthNext = closeMonth;
+closeMonth = function(){
+  const nx = clone(state.next||{}), had = nextHasData(), n0 = state.archive.length;
+  _closeMonthNext();
+  if (state.archive.length > n0) {
+    if (had) {
+      LOCATIONS.forEach(l=>{
+        const i = (nx.inputs||{})[l.id]||{}; NEXT_INP.forEach(x=>{ if (i[x[0]]!==undefined) state.inputs[l.id][x[0]] = Number(i[x[0]])||0; });
+        const p = (nx.plan||{})[l.id]||{}; DIRECTIONS.forEach(d=>{ const q = p[d.key]||{}; state.plan[l.id][d.key] = { c20:Number(q.c20)||0, c40:Number(q.c40)||0 }; });
+      });
+    }
+    state.next = {}; saveAndRender();
+  }
+};
 
 render();
 </script></body></html>

@@ -973,7 +973,7 @@ function closeMonth(){
     inputs: JSON.parse(JSON.stringify(state.inputs)),
     plan: bakeFinalPlan(state.inputs, state.plan),
     fact: JSON.parse(JSON.stringify(state.fact)),
-    routesPlan: rt.plan, routesFact: rt.fact,
+    routesPlan: rt.plan, routesFact: rt.fact, impPlan: importStatsCtx(state.inputs).p, impFact: importStatsCtx(state.inputs).f,
     routes: JSON.parse(JSON.stringify(state.routes)),
   });
   state.monthCursor += 1;
@@ -1254,6 +1254,37 @@ function flowBarHtml(inputs, plan, loc){
   return '<div class="flowbar">'+segs+unallocHtml+'<div class="flowbar-norm" style="left:'+normPct+'%"></div>'+overMark+'</div>';
 }
 
+// подход импорта: план и факт сдачи по локациям (20'+40')
+function importStatsCtx(inputs){
+  const rows=[]; let p=0,f=0,p20=0,p40=0,f20=0,f40=0;
+  LOCATIONS.forEach(l=>{ const i=(inputs&&inputs[l.id])||{};
+    const a20=i.imp20||0,a40=i.imp40||0,b20=i.impF20||0,b40=i.impF40||0;
+    rows.push({ id:l.id, name:l.name, p:a20+a40, f:b20+b40 });
+    p20+=a20; p40+=a40; f20+=b20; f40+=b40; });
+  p=p20+p40; f=f20+f40;
+  return { rows, p, f, p20, p40, f20, f40, r: p>0 ? f/p : null };
+}
+function importPanelHtml(inputs){
+  const st = importStatsCtx(inputs), cl = r=> r===null ? "var(--ink)" : (r>=1 ? "var(--ok)" : "var(--danger)");
+  const small = (lb,v,col)=>'<div style="min-width:110px"><div class="muted" style="font-size:11px">'+lb+'</div><div style="font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;'+(col?'color:'+col:'')+'">'+v+'</div></div>';
+  let body;
+  if (st.p===0 && st.f===0) {
+    body = '<p class="muted" style="font-size:12.5px;margin:6px 0 0">План и факт сдачи импорта не внесены. Вносятся на вкладке «Ввод данных», блок «Сдача импорта».</p>';
+  } else {
+    const rows = st.rows.filter(x=>x.p>0||x.f>0);
+    const chart = svgBars(rows.map(x=>x.name.length>9?x.name.slice(0,8)+"…":x.name), [
+      { name:"План сдачи", color:"#B9C7D4", values:rows.map(x=>x.p) },
+      { name:"Факт сдачи", color:"#0F7B68", values:rows.map(x=>x.f) } ]);
+    const trs = rows.map(x=>{ const r = x.p>0 ? x.f/x.p : null; return '<tr><td class="loc-name">'+x.name+'</td><td class="num-cell">'+fmt(x.p)+'</td><td class="num-cell">'+fmt(x.f)+'</td><td class="num-cell" style="color:'+cl(r)+';font-weight:600">'+(r===null?"—":Math.round(r*100)+"%")+'</td></tr>'; }).join("")+
+      '<tr class="total-row"><td>Итого</td><td class="num-cell">'+fmt(st.p)+'</td><td class="num-cell">'+fmt(st.f)+'</td><td class="num-cell">'+(st.r===null?"—":Math.round(st.r*100)+"%")+'</td></tr>';
+    body = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px;align-items:start;margin-top:10px">'+
+      '<div style="max-width:440px">'+chart+'<div class="muted" style="font-size:11px">серый — план сдачи, зелёный — факт, шт</div></div>'+
+      '<table><thead><tr><th>Локация</th><th>План, шт</th><th>Факт, шт</th><th>%</th></tr></thead><tbody>'+trs+'</tbody></table></div>';
+  }
+  return '<div class="panel"><p class="panel-title">Подход импорта: план и факт сдачи</p>'+
+    expl('сколько контейнеров импорта планировали сдать на локации и сколько сдали на самом деле.','Процент сдачи используется для расчёта ресурса и прогноза подхода. Данные вносятся на «Вводе данных».')+
+    '<div style="display:flex;gap:22px;flex-wrap:wrap">'+small("План сдачи, шт",fmt(st.p))+small("Факт сдачи, шт",fmt(st.f))+small("Выполнение",st.r===null?"—":Math.round(st.r*100)+"%",cl(st.r))+small("20' план / факт",fmt(st.p20)+" / "+fmt(st.f20))+small("40' план / факт",fmt(st.p40)+" / "+fmt(st.f40))+'</div>'+body+'</div>';
+}
 // % сдачи по истории: факт подхода импорта / план за закрытые месяцы (по локации, 20'+40').
 function autoAccFor(locId){
   let P=0,F=0;
@@ -1922,6 +1953,7 @@ function renderDashboardTab(ctx){
     '<div class="panel"><p class="panel-title">По департаментам</p>'+expl('сколько контейнеров каждый департамент вывез из запланированного за '+monthLabel.toLowerCase()+'.',
           'в карточке — процент выполнения и «вывезено из плана» в штуках: зелёный — план выполнен, красный — нет. На столбцах серый — план, синий — факт; синий ниже серого — недовывоз. Наведите на столбец — точные числа.')+
     deptKpi+'<div style="margin-top:18px">'+bars+'</div></div>'+
+    importPanelHtml(inputs)+
     stockPanel+
     matrixPanel+
     sharesPanel+
@@ -2574,6 +2606,12 @@ function renderArchiveTab(){
       { name:"Факт, поездов", color:"#0A6C9E", values:months.map(m=>m.rPlan===null?null:m.rFact) },
     ],
     { name:"% выполнения", color:"#C07A1C", values:months.map(m=>m.rPlan ? m.rFact/m.rPlan : null) });
+  months.forEach(m=>{ m.imp = importStatsCtx(m.inputs); });
+  const chImport = svgCombo(lbls, [
+      { name:"План сдачи", color:"#B9C7D4", values:months.map(m=>m.imp.p>0?m.imp.p:null) },
+      { name:"Факт сдачи", color:"#0F7B68", values:months.map(m=>m.imp.p>0?m.imp.f:null) },
+    ],
+    { name:"% выполнения", color:"#C07A1C", values:months.map(m=>m.imp.p>0 ? m.imp.f/m.imp.p : null) });
   const box = (title, sub, svg, legend)=> '<div class="panel" style="margin-bottom:0"><p class="panel-title">'+title+'</p>'+(Array.isArray(sub) ? expl(sub[0], sub[1]) : '<p class="panel-sub">'+sub+'</p>')+svg+legend+'</div>';
   const overviewHtml =
     '<div class="chart-grid">'+
@@ -2583,6 +2621,7 @@ function renderArchiveTab(){
       box("Вывезено от излишка",["какую часть излишка (контейнеров сверх нормы: сток + подход − норма) реально вывезли за месяц, отдельно 20' и 40'.","пунктир — 100%. На нём и выше — всё лишнее вывезли; ниже — часть контейнеров сверх нормы осталась на площадках."], chToSurplus, chartLegend([{name:"20-футовые",color:"#0F7B68"},{name:"40-футовые",color:"#004D77"}]))+
       box("Выполнение по департаментам",["процент выполнения плана каждым департаментом по месяцам.","пунктир — 100%; линия ниже — план не выполнен. Видно, кто проседает постоянно, а кто разово."], chDept, chartLegend(DIRECTIONS.map(d=>({name:d.label,color:d.color}))))+
       box("Выполнение плана поездов (НЗ)",["сколько поездов по направлениям НЗ запланировали (серый) и отправили (синий), линия — процент выполнения (шкала справа).","н/д — данные по поездам за месяц не вносились; их можно добавить через «Редактировать» в месяце ниже."], chTrains, chartLegend([{name:"План",color:"#B9C7D4"},{name:"Факт",color:"#0A6C9E"},{name:"% выполнения",color:"#C07A1C"}]))+
+      box("Выполнение импортного плана",["сколько контейнеров импорта планировали сдать (серый) и сдали (зелёный) по месяцам, линия — процент выполнения (шкала справа).","н/д — план сдачи за месяц не вносился. Эти данные потом используются для прогноза сдачи импорта."], chImport, chartLegend([{name:"План сдачи",color:"#B9C7D4"},{name:"Факт сдачи",color:"#0F7B68"},{name:"% выполнения",color:"#C07A1C"}]))+
     '</div>'+
     '<p class="muted" style="font-size:11.5px;margin:8px 0 18px">* текущий месяц, ещё не закрыт — факт неполный</p>';
 
@@ -2592,6 +2631,7 @@ function renderArchiveTab(){
     const open = expandedArchiveIndex===idx;
     const editing = editingArchiveIndex===idx;
     const hasSnapshot = !!(a.inputs && a.plan && a.fact);
+    const ist = a.inputs ? importStatsCtx(a.inputs) : {p:a.impPlan||0,f:a.impFact||0}; const impTxt = ist.p>0 ? fmt(ist.f)+' из '+fmt(ist.p)+' ('+Math.round(ist.f/ist.p*100)+'%)' : '';
 
     let detail = "";
     if (open) {
@@ -2610,7 +2650,7 @@ function renderArchiveTab(){
     return '<div class="arch-row">'+
       '<div class="arch-summary" onclick="toggleArchiveRow('+idx+')">'+
       '<div class="arch-summary-left"><span class="arch-chevron'+(open?" open":"")+'">&#9656;</span><span class="loc-name">'+a.label+' '+(a.year||'')+'</span></div>'+
-      '<div class="arch-summary-nums"><span>план '+fmt(a.totalPlan)+'</span><span>факт '+fmt(a.totalFact)+'</span><span>'+rHtml+'</span></div>'+
+      '<div class="arch-summary-nums"><span>план '+fmt(a.totalPlan)+'</span><span>факт '+fmt(a.totalFact)+'</span><span>'+rHtml+'</span>'+(impTxt?'<span class="muted">импорт '+impTxt+'</span>':'')+'</div>'+
       '</div>'+detail+'</div>';
   }).join("");
 
@@ -3508,6 +3548,7 @@ function reportData(sel){
   sum.push([{v:"Департамент",b:1},{v:"План, шт",b:1},{v:"Факт, шт",b:1},{v:"% выполнения",b:1}]);
   DIRECTIONS.forEach(d=>sum.push([d.label, t.planByDir[d.key], t.factByDir[d.key], pctCell(t.factByDir[d.key], t.planByDir[d.key])]));
   sum.push([""]); sum.push(["Поезда: план / факт, шт", rt.plan, rt.fact, pctCell(rt.fact, rt.plan)]);
+  { const im = importStatsCtx(inputs); sum.push(["Сдача импорта: план / факт, шт", im.p, im.f, pctCell(im.f, im.p)]); }
   sh.push({ name:"Итоги", rows:sum, widths:[34,16,16,16] });
   const hd = [{v:"Локация",b:1},{v:"Ресурс 20'",b:1},{v:"Ресурс 40'",b:1},{v:"Норма 20'",b:1},{v:"Норма 40'",b:1},{v:"Излишек 20'",b:1},{v:"Излишек 40'",b:1}];
   DIRECTIONS.forEach(d=>{ hd.push({v:"План "+d.label,b:1}); hd.push({v:"Факт "+d.label,b:1}); });
@@ -3521,13 +3562,15 @@ function reportData(sel){
   sh.push({ name:"Локации", rows:lr, widths:[20,12,12,12,12,12,12].concat(DIRECTIONS.flatMap(()=>[16,16]), [14,14,14]) });
   const ah = [{v:"Месяц",b:1},{v:"Год",b:1},{v:"Объём, шт",b:1},{v:"План, шт",b:1},{v:"Факт, шт",b:1},{v:"% выполнения",b:1}];
   DIRECTIONS.forEach(d=>{ ah.push({v:"План "+d.label,b:1},{v:"Факт "+d.label,b:1},{v:"% "+d.label,b:1}); });
+  ah.push({v:"Импорт: план сдачи",b:1},{v:"Импорт: факт сдачи",b:1},{v:"% импорта",b:1});
   const ar = [ah];
   (state.archive||[]).forEach(a=>{
     const r = [a.label, a.year||"", a.totalVolume||0, a.totalPlan||0, a.totalFact||0, pctCell(a.totalFact||0, a.totalPlan||0)];
     DIRECTIONS.forEach(d=>{ const p = (a.planByDir||{})[d.key]||0, f = (a.factByDir||{})[d.key]||0; r.push(p, f, pctCell(f,p)); });
+    { const im = a.inputs ? importStatsCtx(a.inputs) : { p:a.impPlan||0, f:a.impFact||0 }; r.push(im.p, im.f, pctCell(im.f, im.p)); }
     ar.push(r);
   });
-  sh.push({ name:"Архив", rows:ar, widths:[14,8,12,12,12,14].concat(DIRECTIONS.flatMap(()=>[16,16,12])) });
+  sh.push({ name:"Архив", rows:ar, widths:[14,8,12,12,12,14].concat(DIRECTIONS.flatMap(()=>[16,16,12]), [16,16,12]) });
   { const rs = reasonRowsCtx(inputs, plan, fact, isCur ? state.reasons : (state.archive[parseInt(sel,10)]||{}).reasons);
     if (rs.length) sh.push({ name:"Причины невыполнения", rows:[[{v:"Департамент",b:1},{v:"Локация",b:1},{v:"План, шт",b:1},{v:"Факт, шт",b:1},{v:"Недовывоз, шт",b:1},{v:"Причина",b:1}]].concat(rs.map(r=>[r.dept, r.loc, r.plan, r.fact, r.gap, r.reason||"—"])), widths:[20,20,12,12,14,70] }); }
   const cm = isCur ? (ONLINE.ext.comments||[]).slice(0,30) : [];

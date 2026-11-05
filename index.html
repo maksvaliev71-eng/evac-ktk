@@ -903,6 +903,37 @@ function totalsFull(){ return totalsFullCtx(state.inputs, state.plan, state.fact
 function setTab(t){ state.tab=t; saveAndRender(); }
 function setInputField(locId, field, value){ state.inputs[locId][field]=Number(value)||0; saveAndRender(); }
 function setPlanField(locId, deptKey, sizeKey, value){ state.plan[locId][deptKey][sizeKey]=Number(value)||0; saveAndRender(); }
+function setFactWeek(locId, deptKey, w, sizeKey, value){
+  const f = state.fact[locId][deptKey]; if (!f.w) f.w = [];
+  const wk = f.w[w] = f.w[w] || {c20:0,c40:0}, nv = Number(value)||0;
+  f[sizeKey] = Math.max(0, (f[sizeKey]||0) + nv - (wk[sizeKey]||0)); wk[sizeKey] = nv; saveAndRender();
+}
+const FACT_WEEKS = ["1–7","8–14","15–21","22–28","29–31"];
+window.__fw = window.__fw || { open:false, dept:null };
+function fwToggle(){ window.__fw.open = !window.__fw.open; render(); }
+function fwDept(d){ window.__fw.dept = d; render(); }
+function factWeeklyHtml(){
+  const fw = window.__fw;
+  if (!fw.dept) fw.dept = (typeof ONLINE!=="undefined" && ONLINE.me && DIRECTIONS.some(d=>d.key===ONLINE.me.dept)) ? ONLINE.me.dept : DIRECTIONS[0].key;
+  const head = '<div style="margin-top:14px"><button class="btn" onclick="fwToggle()">'+(fw.open?"▾ Скрыть ввод по неделям":"▸ Ввод факта по неделям")+'</button></div>';
+  if (!fw.open) return head;
+  const dk = fw.dept;
+  const chips = DIRECTIONS.map(d=>{ const on = d.key===dk; const st = on ? 'background:'+d.color+';border-color:'+d.color+';color:#fff' : 'border-color:'+d.color+';color:'+d.color; return '<span class="dept-chip" style="'+st+'" onclick="fwDept(\''+d.key+'\')">'+d.label+'</span>'; }).join(" ");
+  const rows = LOCATIONS.map(l=>{
+    const f = state.fact[l.id][dk], w = f.w || [];
+    const cells = FACT_WEEKS.map((_,i)=>{
+      const wk = w[i] || {c20:0,c40:0};
+      ["c20","c40"].forEach(sz=>{ window["hw_"+l.id+"_"+dk+"_"+i+"_"+sz] = v=>setFactWeek(l.id,dk,i,sz,v); });
+      return '<td><div class="cell-pair">'+numField('fw-'+l.id+'-'+dk+'-'+i+'-c20', wk.c20||0, "hw_"+l.id+"_"+dk+"_"+i+"_c20")+numField('fw-'+l.id+'-'+dk+'-'+i+'-c40', wk.c40||0, "hw_"+l.id+"_"+dk+"_"+i+"_c40")+'</div></td>';
+    }).join("");
+    const s20 = w.reduce((a,x)=>a+((x&&x.c20)||0),0), s40 = w.reduce((a,x)=>a+((x&&x.c40)||0),0);
+    const o20 = (f.c20||0)-s20, o40 = (f.c40||0)-s40;
+    return '<tr><td class="loc-name">'+l.name+'</td>'+cells+'<td class="num-cell muted">20\': '+fmt(o20)+'<br>40\': '+fmt(o40)+'</td><td class="num-cell" style="font-weight:600">'+fmt(factCountFor(l.id,dk))+' шт</td></tr>';
+  }).join("");
+  return head+'<div style="margin-top:10px">'+chips+'</div>'+
+    '<p class="panel-sub" style="margin-top:8px">Вносите факт за неделю: итог месяца в таблице выше пересчитается сам. Недели по числам месяца. «Без недели» — то, что внесено сразу итогом.</p>'+
+    '<div style="overflow-x:auto"><table><thead><tr><th>Локация</th>'+FACT_WEEKS.map(x=>'<th>'+x+'<div class="dept-sub">20\' / 40\', шт</div></th>').join("")+'<th>Без недели</th><th>Итого</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
 function setFactField(locId, deptKey, sizeKey, value){ state.fact[locId][deptKey][sizeKey]=Number(value)||0; saveAndRender(); }
 function setRouteField(routeKey, field, value){ state.routes[routeKey][field]=Number(value)||0; saveAndRender(); }
 // доли 40'/20' храним как введённую строку, а не сразу числом — иначе
@@ -1306,16 +1337,9 @@ function renderDistributeTab(){
         numField('plan40-'+l.id+'-'+d.key, p.c40, "hp_"+l.id+"_"+d.key+"_c40")+
         '</div><div class="teu-hint">= '+fmt(manualCountFor(l.id,d.key))+' шт</div></td>';
     }).join("");
-    let badge;
-    if (over20>0 && over40>0) {
-      badge = '<span class="badge badge-bad">перебор 20\': '+fmt(over20)+'</span> <span class="badge badge-bad">перебор 40\': '+fmt(over40)+'</span>';
-    } else if (over20>0) {
-      badge = '<span class="badge badge-bad">перебор 20\': '+fmt(over20)+'</span>';
-    } else if (over40>0) {
-      badge = '<span class="badge badge-bad">перебор 40\': '+fmt(over40)+'</span>';
-    } else {
-      badge = '<span class="badge badge-ok">ок</span>';
-    }
+    const lf20 = rawLeftover20For(state.inputs, state.plan, l.id), lf40 = rawLeftover40For(state.inputs, state.plan, l.id);
+    const bdg = (sz,v)=>'<span class="badge '+(v<0?"badge-bad":"badge-ok")+'">'+sz+'\': '+(v>0?"+":"")+fmt(v)+'</span>';
+    const badge = bdg("20",lf20)+' '+bdg("40",lf40);
     return '<tr><td class="loc-name">'+l.name+'</td><td class="num-cell">'+fmt(vol)+'</td>'+deptCells+
       '<td class="num-cell">'+fmt(sum)+'</td><td>'+badge+'</td></tr>';
   }).join("");
@@ -1367,7 +1391,7 @@ function renderDistributeTab(){
   return '<div class="panel">'+
     '<p class="panel-title">1. Планы департаментов (вручную)</p>'+
     '<p class="panel-sub">Департаменты вносят свои планы в штуках. Остаток распределится автоматически на шаге 2.</p>'+
-    '<table><thead><tr><th>Локация</th><th>Объём к эвакуации, шт</th>'+deptHeadCells+'<th>Сумма планов, шт</th><th>Проверка</th></tr></thead>'+
+    '<table><thead><tr><th>Локация</th><th>Объём к эвакуации, шт</th>'+deptHeadCells+'<th>Сумма планов, шт</th><th>Остаток КТК (ресурс − норма − планы)</th></tr></thead>'+
     '<tbody>'+manualRows+'</tbody></table></div>'+
 
     '<div class="panel"><p class="panel-title">Доли автораспределения остатка</p>'+
@@ -1383,7 +1407,7 @@ function renderDistributeTab(){
     '<div class="panel"><p class="panel-title">3. Факт выдачи</p>'+
     '<p class="panel-sub">Фактически вывезенный объём по направлениям, в штуках 20\'/40\'. Заполняется 5–7 числа следующего месяца.</p>'+
     '<table><thead><tr><th>Локация</th>'+deptHeadCells+'</tr></thead>'+
-    '<tbody>'+factRows+'</tbody></table></div>';
+    '<tbody>'+factRows+'</tbody></table>'+factWeeklyHtml()+'</div>';
 }
 
 function renderTrainsTab(){
@@ -3082,6 +3106,7 @@ function areaOfKey(k){
   if (/^(imp20|imp40|impf20|impf40)-/.test(k)) return "import";
   if ((m = k.match(/^plan(?:20|40)-[a-z]+-(\w+)$/))) return "plan_"+m[1];
   if ((m = k.match(/^fact(?:20|40)-[a-z]+-(\w+)$/))) return "fact_"+m[1];
+  if ((m = k.match(/^fw-[a-z]+-(\w+)-\d-c\d\d$/))) return "fact_"+m[1];
   if (/^dshare-/.test(k)) return "shares";
   if (/^(rplan|rfact|rteu|rs20|rs40)-/.test(k)) return "routes";
   if (/^(horizon|teuov)-/.test(k)) return "trainsCfg";
@@ -3607,6 +3632,7 @@ closeMonth = function(){
   let q = miss.length ? "Не подтвердили:\n• "+miss.join("\n• ")+"\n\n" : "";
   if (nr) q += "Не указаны причины невыполнения плана: "+nr+".\n\n";
   q += q ? "Всё равно закрыть месяц?" : "Закрыть месяц? Данные уйдут в архив, поля для заполнения обнулятся.";
+  { const fi0 = state.forecastInflow||{}; if (LOCATIONS.some(l=>fi0[l.id]&&(fi0[l.id].c20||fi0[l.id].c40))) q += "\n\nОжидаемый подход из «Прогноза» станет подходом импорта (план) нового месяца, в прогнозе он обнулится."; }
   if (nextHasData()) q += "\n\nДанные со вкладки «Следующий месяц» (сток, нормы, план) попадут в новый месяц автоматически.";
   if (!confirm(q)) return;
   const rs = clone(state.reasons || {}), n0 = state.archive.length;
@@ -4003,7 +4029,7 @@ function renderNextTab(){
 }
 const _closeMonthNext = closeMonth;
 closeMonth = function(){
-  const nx = clone(state.next||{}), had = nextHasData(), n0 = state.archive.length;
+  const nx = clone(state.next||{}), had = nextHasData(), n0 = state.archive.length, fi = clone(state.forecastInflow||{});
   _closeMonthNext();
   if (state.archive.length > n0) {
     if (had) {
@@ -4012,6 +4038,8 @@ closeMonth = function(){
         const p = (nx.plan||{})[l.id]||{}; DIRECTIONS.forEach(d=>{ const q = p[d.key]||{}; state.plan[l.id][d.key] = { c20:Number(q.c20)||0, c40:Number(q.c40)||0 }; });
       });
     }
+    LOCATIONS.forEach(l=>{ const q = fi[l.id]||{}; if (Number(q.c20)) state.inputs[l.id].imp20 = Number(q.c20)||0; if (Number(q.c40)) state.inputs[l.id].imp40 = Number(q.c40)||0; });
+    state.forecastInflow = defaultInflow();
     state.next = {}; saveAndRender();
   }
 };

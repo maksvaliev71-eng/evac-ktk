@@ -14,8 +14,11 @@ const DEFAULT_PERMS = {
   export: ["plan_export", "fact_export"],
   import: ["import"],
   rail: ["routes"],
+  expl: ["fact_expl", "import_fact", "stock"],
 };
-const DEPT_KEYS = ["vnutriros", "export", "import", "rail"];
+// частичные права: что можно менять внутри общего документа
+const PARTIAL = { import: { need: "import_fact", fields: ["impF20", "impF40"] }, inputs: { need: "stock", fields: ["resource20", "resource40"] } };
+const DEPT_KEYS = ["vnutriros", "export", "import", "rail", "expl"];
 const ALL_DEPTS = DEPT_KEYS.concat(["viewer", "manager", "admin"]);
 
 // ---------- файловое хранилище ----------
@@ -32,7 +35,7 @@ let logs = readJson(LOG_F, []);
 const EXT_F = path.join(DATA_DIR, "ext.json"), MAIL_F = path.join(DATA_DIR, "mail.json"), BK_DIR = path.join(DATA_DIR, "backups");
 let ext = readJson(EXT_F, {});          // статусы готовности, сроки, комментарии
 ext.status = ext.status || {}; ext.deadlines = ext.deadlines || {}; ext.comments = ext.comments || []; ext.reminded = ext.reminded || {};
-const MAIL_DEF = { enabled: false, mode: "ssl", host: "", port: 465, user: "", pass: "", from: "", siteUrl: "", evReady: true, evAll: true, evClosed: true, evRemind: true, evWeekly: true, evCloseRpt: true };
+const MAIL_DEF = { evPlans: true, enabled: false, mode: "ssl", host: "", port: 465, user: "", pass: "", from: "", siteUrl: "", evReady: true, evAll: true, evClosed: true, evRemind: true, evWeekly: true, evCloseRpt: true };
 let mailCfg = Object.assign({}, MAIL_DEF, readJson(MAIL_F, {}));
 const HIST_F = path.join(DATA_DIR, "history.jsonl");
 let history = [];   // последние правки по ячейкам: {t,u,n,d,doc,p,f,v}
@@ -73,13 +76,21 @@ function canWriteDoc(me, id) {
   const a = areaOfDoc(id);
   if (a === "archive" || a === "meta") return false;
   if (a.indexOf("reasons_") === 0) return a === "reasons_" + me.dept;
-  return permsFor(me.dept).includes(a);
+  const P = permsFor(me.dept);
+  return P.includes(a) || !!(PARTIAL[a] && P.includes(PARTIAL[a].need));
+}
+// поля, которые можно менять (null — документ можно менять целиком)
+function partialFields(me, id) {
+  if (me.dept === "admin") return null;
+  const a = areaOfDoc(id), P = permsFor(me.dept);
+  return (PARTIAL[a] && !P.includes(a) && P.includes(PARTIAL[a].need)) ? PARTIAL[a].fields : null;
 }
 // какой части статуса соответствует область данных
 const AREA_KIND = {
   plan_vnutriros: { dept: "vnutriros", kind: "plan" }, fact_vnutriros: { dept: "vnutriros", kind: "fact" },
   plan_export: { dept: "export", kind: "plan" }, fact_export: { dept: "export", kind: "fact" },
   import: { dept: "import", kind: "import" }, routes: { dept: "rail", kind: "rail" },
+  plan_expl: { dept: "expl", kind: "plan" }, fact_expl: { dept: "expl", kind: "fact" },
 };
 const STATUS_KINDS = { vnutriros: ["plan", "fact"], export: ["plan", "fact"], expl: ["plan", "fact"], import: ["import"], rail: ["rail", "railfact"] };
 const KIND_LABEL = { plan: "план", fact: "факт", import: "сдача импорта", rail: "поезда: ТЕУ, план, доли", railfact: "поезда: факт" };
@@ -124,6 +135,12 @@ function flatten(v, pre, out) {
   else out[pre] = v;
   return out;
 }
+// кто сейчас вводит какую ячейку
+const presence = new Map();
+let presenceSig = "";
+function presenceList() { return [...presence].map(([uid, v]) => ({ uid, key: v.key, name: v.name })); }
+function presenceBroadcast() { const l = presenceList(), sig = JSON.stringify(l); if (sig === presenceSig) return; presenceSig = sig; broadcast("presence", l); }
+setInterval(() => { const now = Date.now(); let ch = false; for (const [u, v] of presence) if (now - v.t > 20000) { presence.delete(u); ch = true; } if (ch) presenceBroadcast(); }, 5000);
 function recordHistory(me, doc, before, after) {
   if (doc === "meta") return;
   const a = flatten(before || {}, "", {}), b = flatten(after || {}, "", {}), ch = [], t = Date.now();
@@ -268,6 +285,23 @@ function closeReport() {
   if (rs.length) { html += h3("Причины невыполнения плана") + tbl(["Департамент", "Локация", "Причина"], rs).replace(/text-align:right/g, "text-align:left"); txt += "\nПричины невыполнения:\n" + rs.map(r => "- " + r.join(" / ")).join("\n") + "\n"; }
   return { subject: "Месяц закрыт — отчёт: " + label.trim(), text: txt, html: wrapHtml("Отчёт по закрытию месяца: " + label.trim(), html) };
 }
+function plansAllReady() { return ["vnutriros", "export", "expl"].every(d => { const st = ext.status[d] && ext.status[d].plan; return st && st.ready && !st.dirty; }); }
+function plansReport() {
+  const sn = ext.snap; if (!sn || !sn.plans || !Object.keys(sn.plans).length) return null;
+  const keys = Object.keys(DIR_NAMES), tot = { all: { c20: 0, c40: 0 } };
+  keys.forEach(k => { tot[k] = { c20: 0, c40: 0 }; });
+  const names = sn.names || {};
+  const rows = Object.keys(sn.plans).map(id => {
+    const p = sn.plans[id]; let a20 = 0, a40 = 0; const r = [names[id] || id];
+    keys.forEach(k => { const q = p[k] || { c20: 0, c40: 0 }; r.push(nf(q.c20), nf(q.c40)); a20 += q.c20; a40 += q.c40; tot[k].c20 += q.c20; tot[k].c40 += q.c40; });
+    r.push(nf(a20), nf(a40), nf(a20 + a40)); tot.all.c20 += a20; tot.all.c40 += a40; return r;
+  });
+  const trow = ["Итого"]; keys.forEach(k => trow.push(nf(tot[k].c20), nf(tot[k].c40))); trow.push(nf(tot.all.c20), nf(tot.all.c40), nf(tot.all.c20 + tot.all.c40)); rows.push(trow);
+  const head = ["Локация"]; keys.forEach(k => { head.push(DIR_NAMES[k] + " 20'", DIR_NAMES[k] + " 40'"); }); head.push("Всего 20'", "Всего 40'", "Всего");
+  let txt = "Все департаменты подтвердили планы — " + sn.label + "\n\n" + head.join(" | ") + "\n" + rows.map(r => r.join(" | ")).join("\n") + "\n";
+  const html = '<p style="margin:0 0 8px;color:#556">Все департаменты нажали «Готово» по планам. Итоговый план по локациям, шт.</p>' + tbl(head, rows);
+  return { subject: "Планы подтверждены — " + sn.label, text: txt, html: wrapHtml("Планы всех департаментов: " + sn.label, html) };
+}
 const reportRcpts = () => emailsOf(u => u.dept === "admin" || u.dept === "manager" || u.dept === "viewer");
 function sendReport(r) { if (r) return sendMail(reportRcpts(), r.subject, r.text, r.html); return Promise.resolve(); }
 function weeklyCheck() {
@@ -313,7 +347,7 @@ function remindersCheck() {
     const st = ext.status[dept] && ext.status[dept][kind]; if (st && st.ready && !st.dirty) continue;
     const key = dept + "|" + kind + "|" + d + "|" + today; if (ext.reminded[key]) continue;
     ext.reminded[key] = 1; dirty = true;
-    mailDept(dept, "Напоминание: срок — " + KIND_LABEL[kind], "Срок внесения («" + KIND_LABEL[kind] + "») — " + fmtDate(d) + (d === today ? " (сегодня)" : " (завтра)") + ". Данные ещё не подтверждены кнопкой «Готово».");
+    (dept === "expl" && kind === "plan" ? mailAdmins : (s2, t2) => mailDept(dept, s2, t2))("Напоминание: срок — " + KIND_LABEL[kind], "Срок внесения («" + KIND_LABEL[kind] + "») — " + fmtDate(d) + (d === today ? " (сегодня)" : " (завтра)") + ". Данные ещё не подтверждены кнопкой «Готово».");
   }
   Object.keys(ext.reminded).forEach(k => { if (k.split("|")[3] < today) delete ext.reminded[k]; });
   if (dirty) writeJson(EXT_F, ext);
@@ -345,7 +379,7 @@ function readBody(req, limit) {
   });
 }
 function publicUsers(withEmail) {
-  const o = {}; for (const id of Object.keys(users)) { o[id] = { login: users[id].login, name: users[id].name, dept: users[id].dept }; if (withEmail) o[id].email = users[id].email || ""; } return o;
+  const o = {}; for (const id of Object.keys(users)) { o[id] = { login: users[id].login, name: users[id].name, dept: users[id].dept }; if (withEmail) { o[id].email = users[id].email || ""; o[id].head = !!users[id].head; } } return o;
 }
 function cookieHeader(req, token, maxAge) {
   const secure = (req.headers["x-forwarded-proto"] === "https") ? "; Secure" : "";
@@ -411,14 +445,19 @@ const server = http.createServer(async (req, res) => {
       const dept = (me.dept === "admin" && b.dept) ? String(b.dept) : me.dept, kind = String(b.kind || "");
       if (!STATUS_KINDS[dept] || !STATUS_KINDS[dept].includes(kind)) return send(res, 403, { error: "Нет такого статуса для вашего департамента" });
       if (me.dept !== "admin" && me.dept !== dept) return send(res, 403, { error: "Нет прав" });
+      if (me.dept === "expl" && kind !== "fact") return send(res, 403, { error: "Эксплуатация подтверждает только факт" });
       ext.status[dept] = ext.status[dept] || {};
       if (b.ready) {
         ext.status[dept][kind] = { ready: true, t: Date.now(), by: me.name, dirty: false };
         addLogText(me, "Подтвердил(а): " + KIND_LABEL[kind] + " готов");
+        if (kind === "plan" && plansAllReady() && !ext.plansReported) {
+          ext.plansReported = true;
+          if (mailCfg.enabled && mailCfg.evPlans) setTimeout(() => { try { sendReport(plansReport()); } catch (e) { console.error("plansReport:", e.message); } }, 10000);
+        }
         if (mailCfg.evReady) mailAdmins("Готово: " + DEPT_LABEL[dept] + " — " + KIND_LABEL[kind], DEPT_LABEL[dept] + ": " + KIND_LABEL[kind] + " подтверждён (" + me.name + ").");
         if (mailCfg.evAll && allReady()) mailAdmins("Все департаменты подтвердили данные", "Все департаменты подтвердили план, факт и остальные данные. Месяц можно закрывать.");
       } else {
-        delete ext.status[dept][kind];
+        delete ext.status[dept][kind]; if (kind === "plan") ext.plansReported = false;
         addLogText(me, "Снял(а) подтверждение: " + KIND_LABEL[kind]);
       }
       saveExt(); return send(res, 200, { ok: true });
@@ -436,6 +475,11 @@ const server = http.createServer(async (req, res) => {
       if (me.dept !== "admin" && c.u !== me.id) return send(res, 403, { error: "Удалить можно только свой комментарий" });
       ext.comments = ext.comments.filter(x => x.id !== mc[1]); saveExt(); return send(res, 200, { ok: true });
     }
+    if (p === "/api/presence" && req.method === "POST") {
+      const b = await readBody(req, 1000), key = String(b.key || "").slice(0, 80);
+      if (key && b.on !== false) presence.set(me.id, { key, name: me.name, t: Date.now() }); else presence.delete(me.id);
+      presenceBroadcast(); return send(res, 200, { ok: true });
+    }
     if (p === "/api/events" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
       res.write("retry: 3000\n\n");
@@ -449,14 +493,20 @@ const server = http.createServer(async (req, res) => {
       const id = m[1];
       if (req.method === "PUT") {
         const den = writeDenied(me, id); if (den) return send(res, 403, { error: den });
-        const b = await readBody(req, 2 * 1024 * 1024);
+        let b = await readBody(req, 2 * 1024 * 1024);
         if (!b || typeof b !== "object" || Array.isArray(b)) return send(res, 400, { error: "Неверные данные" });
+        const pf = partialFields(me, id);
+        if (pf) { // меняем только разрешённые поля, всё остальное остаётся как было
+          const out = JSON.parse(JSON.stringify(appDocs[id] || {}));
+          for (const loc of Object.keys(b)) { if (!b[loc] || typeof b[loc] !== "object") continue; for (const f of pf) if (b[loc][f] !== undefined) { out[loc] = out[loc] || {}; out[loc][f] = Number(b[loc][f]) || 0; } }
+          b = out;
+        }
         const before = appDocs[id], oldCursor = id === "meta" && before ? before.monthCursor : undefined;
         const changed = JSON.stringify(before) !== JSON.stringify(b);
         appDocs[id] = b; writeJson(path.join(APP_DIR, id + ".json"), b);
         if (changed) { try { recordHistory(me, id, before, b); } catch (e) { console.error("history:", e.message); } }
         broadcast("app", { id, data: b }); addLog(me, id);
-        if (changed && me.dept !== "admin") {
+        if (changed && me.dept !== "admin" && !pf) {
           const ak = AREA_KIND[id];
           if (ak) {
             let kinds = [ak.kind];
@@ -466,12 +516,13 @@ const server = http.createServer(async (req, res) => {
               kinds = [...new Set(kinds)];
             }
             let mark = false;
+            if (kinds.includes("plan")) ext.plansReported = false;
             for (const kd of kinds) { const st = ext.status[ak.dept] && ext.status[ak.dept][kd]; if (st && st.ready && !st.dirty) { st.dirty = true; mark = true; } }
             if (mark) saveExt();
           }
         }
         if (id === "meta" && oldCursor !== undefined && b.monthCursor !== oldCursor) {
-          ext.status = {}; ext.deadlines = {}; ext.reminded = {}; saveExt();
+          ext.status = {}; ext.deadlines = {}; ext.reminded = {}; ext.plansReported = false; saveExt();
           if (mailCfg.enabled && mailCfg.evCloseRpt) setTimeout(() => { try { sendReport(closeReport()); } catch (e) { console.error("closeReport:", e.message); } }, 20000);
           if (mailCfg.evClosed) mailAll("Месяц закрыт", "Администратор закрыл месяц и открыл новый. Данные для заполнения обнулены. Сроки нужно задать заново.");
         }
@@ -488,11 +539,28 @@ const server = http.createServer(async (req, res) => {
       const b = await readBody(req, 60000), N = v => Math.round(Number(v) || 0), S = v => String(v == null ? "" : v).slice(0, 80);
       const dirs = o => { const r = {}; Object.keys(DIR_NAMES).forEach(k => { r[k] = N(o && o[k]); }); return r; };
       const names = {}, locs = (Array.isArray(b.locs) ? b.locs : []).slice(0, 100).map(l => { names[S(l.id)] = S(l.n); return { id: S(l.id), n: S(l.n), p: N(l.p), f: N(l.f) }; });
-      ext.snap = { t: Date.now(), label: S(b.label), totalVolume: N(b.totalVolume), totalPlan: N(b.totalPlan), totalFact: N(b.totalFact), planByDir: dirs(b.planByDir), factByDir: dirs(b.factByDir), rail: { plan: N(b.rail && b.rail.plan), fact: N(b.rail && b.rail.fact) }, locs, names };
+      ext.snap = { t: Date.now(), label: S(b.label), totalVolume: N(b.totalVolume), totalPlan: N(b.totalPlan), totalFact: N(b.totalFact), planByDir: dirs(b.planByDir), factByDir: dirs(b.factByDir), rail: { plan: N(b.rail && b.rail.plan), fact: N(b.rail && b.rail.fact) }, locs, names, plans: {} };
+      if (b.plans && typeof b.plans === "object") for (const id of Object.keys(b.plans).slice(0, 100)) { const o = {}; Object.keys(DIR_NAMES).forEach(k => { const q = (b.plans[id] || {})[k] || {}; o[k] = { c20: N(q.c20), c40: N(q.c40) }; }); ext.snap.plans[S(id)] = o; }
       writeJson(EXT_F, ext); return send(res, 200, { ok: true });
     }
     // ---- только администратор ----
     if (me.dept !== "admin") return send(res, 403, { error: "Только администратор" });
+    if (p === "/api/history/revert" && req.method === "POST") {
+      const b = await readBody(req, 3000), doc = String(b.doc || ""), cellPath = String(b.p || "");
+      if (!/^[A-Za-z0-9_]{1,40}$/.test(doc) || !cellPath || doc === "meta" || cellPath === "*") return send(res, 400, { error: "Эту правку вернуть нельзя" });
+      const d = appDocs[doc]; if (!d) return send(res, 404, { error: "Раздел не найден" });
+      const parts = cellPath.split("."); let o = d;
+      for (let i = 0; i < parts.length - 1; i++) { o = o && o[parts[i]]; if (!o || typeof o !== "object") return send(res, 409, { error: "Ячейка не найдена" }); }
+      const leaf = parts[parts.length - 1];
+      if (String(o[leaf]) !== String(b.to)) return send(res, 409, { error: "Значение уже изменилось после этой правки. Откройте историю заново." });
+      const before = JSON.parse(JSON.stringify(d));
+      if (b.from === null || b.from === undefined) { if (typeof o[leaf] === "number") o[leaf] = 0; else delete o[leaf]; }
+      else o[leaf] = typeof o[leaf] === "number" ? (Number(b.from) || 0) : b.from;
+      writeJson(path.join(APP_DIR, doc + ".json"), d);
+      try { recordHistory(me, doc, before, d); } catch (e) {}
+      broadcast("app", { id: doc, data: d }); addLog(me, doc); addLogText(me, "Вернул(а) значение ячейки (" + doc + ")");
+      return send(res, 200, { ok: true });
+    }
     if (p === "/api/users" && req.method === "POST") {
       const b = await readBody(req, 10000);
       if (!b.login || String(b.login).length > 40) return send(res, 400, { error: "Логин до 40 знаков" });
@@ -519,6 +587,7 @@ const server = http.createServer(async (req, res) => {
           if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return send(res, 400, { error: "Неверный e-mail" });
           if (em) u.email = em; else delete u.email;
         }
+        if (b.head !== undefined) { if (b.head) u.head = true; else delete u.head; }
         if (b.password !== undefined) {
           if (String(b.password).length < 6) return send(res, 400, { error: "Пароль короче 6 знаков" });
           const salt = crypto.randomBytes(16).toString("hex");
@@ -547,12 +616,12 @@ const server = http.createServer(async (req, res) => {
       if (b.pass) n.pass = String(b.pass).slice(0, 200);
       if (b.port !== undefined) n.port = parseInt(b.port, 10) || 0;
       if (["ssl", "starttls", "plain"].includes(b.mode)) n.mode = b.mode;
-      for (const k of ["enabled", "evReady", "evAll", "evClosed", "evRemind", "evWeekly", "evCloseRpt"]) if (b[k] !== undefined) n[k] = !!b[k];
+      for (const k of ["enabled", "evReady", "evAll", "evClosed", "evRemind", "evWeekly", "evCloseRpt", "evPlans"]) if (b[k] !== undefined) n[k] = !!b[k];
       mailCfg = n; writeJson(MAIL_F, mailCfg); return send(res, 200, { ok: true });
     }
     if (p === "/api/mail/report" && req.method === "POST") {
       if (me.dept !== "admin") return send(res, 403, { error: "Только администратор" });
-      const b = await readBody(req, 2000), r = b.type === "close" ? closeReport() : weeklyReport();
+      const b = await readBody(req, 2000), r = b.type === "close" ? closeReport() : b.type === "plans" ? plansReport() : weeklyReport();
       if (!r) return send(res, 400, { error: b.type === "close" ? "Нет закрытых месяцев в архиве" : "Пока нет данных для отчёта: внесите или измените любое значение в данных" });
       const to = reportRcpts(); if (!to.length) return send(res, 400, { error: "Не заполнен ни один адрес у администратора, руководителя или отчётности" });
       if (!mailCfg.enabled) return send(res, 400, { error: "Отправка уведомлений выключена" });

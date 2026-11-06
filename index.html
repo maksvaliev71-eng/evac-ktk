@@ -721,6 +721,7 @@ function migrateState(){
   (state.archive||[]).forEach(a=>{ if (a.plan && a.inputs && a.fact){ const t=computeMonthTotals(a.inputs,a.plan,a.fact); a.totalVolume=t.totalVolume; a.totalPlan=t.totalPlan; a.totalFact=t.totalFact; a.planByDir=t.planByDir; a.factByDir=t.factByDir; } });
   if (!state.forecastInflow) state.forecastInflow = defaultInflow();
   if (!state.forecastLog) state.forecastLog = [];
+  if (!state.calendarK || typeof state.calendarK!=="object") state.calendarK = {};
   (state.archive||[]).forEach(a=>{ if(a.inputs) LOCATIONS.forEach(l=>{ const r=a.inputs[l.id]; if(r && r.imp20===undefined && r.imp40===undefined) r.noAdj=true; }); });
   LOCATIONS.forEach(l=>{ if(!state.forecastInflow[l.id]) state.forecastInflow[l.id]={c20:0,c40:0}; });
 }
@@ -2082,7 +2083,7 @@ function fcDsPF(a, dKey, sz){
   return {p,f};
 }
 // прогноз выполнения по департаментам (в целом и по 20'/40') и по поездам
-function fcCore(hist, ly){
+function fcCore(hist, ly, ctx){
   const blend = (f, l)=> (f!==null && l!==null) ? 0.7*f + 0.3*l : f;
   const hT = hist.map(a=>totalsFullCtx(a.inputs,a.plan,a.fact));
   const lyT = ly ? totalsFullCtx(ly.inputs,ly.plan,ly.fact) : null;
@@ -2103,8 +2104,116 @@ function fcCore(hist, ly){
   const tFr = forecastRate(tVals);
   const tLy = (ly && ly.routes && ly.routesPlan>0) ? ly.routesFact/ly.routesPlan : null;
   const trainRow = { label:"Поезда (НЗ)", color:"#5F7385", vals:tVals, fr:tFr, lyRate:tLy, final: blend(tFr?tFr.f:null, tLy), bySz:null };
+  if (ctx) { try { fcApplyAdjust(rows, trainRow, hist, ctx); } catch(e){ console.error("fcApplyAdjust", e); } }
   return { rows, trainRow };
 }
+// ===== поправки прогноза: что ещё влияет на выполнение =====
+const FC_WEEK_ENDS = [7,14,21,28,31];
+function fcClip(x){ return Math.max(0, Math.min(1.5, x)); }
+function fcDaysInMonth(idx, year){ return new Date(year, idx+1, 0).getDate(); }
+// какая доля месяца уже «прошла» по внесённым данным: по неделям факта, иначе по календарю (если месяц идёт сейчас)
+function fcProgress(dKey, idx, year){
+  const dim = fcDaysInMonth(idx, year); let last = -1;
+  LOCATIONS.forEach(l=>{ const w = (((state.fact[l.id]||{})[dKey])||{}).w; if (w) w.forEach((x,i)=>{ if (x && ((x.c20||0)>0 || (x.c40||0)>0) && i>last) last = i; }); });
+  if (last>=0) return { pt: Math.min(1, Math.min(FC_WEEK_ENDS[last], dim)/dim), src:"weeks", weeks:last+1 };
+  const now = new Date();
+  if (now.getFullYear()===year && now.getMonth()===idx) return { pt: Math.min(1, now.getDate()/dim), src:"cal" };
+  return null;
+}
+function fcApplyAdjust(rows, trainRow, hist, ctx){
+  const lastN = hist.slice(-3), W = [0.2,0.3,0.5].slice(-lastN.length), ws = W.reduce((a,b)=>a+b,0)||1;
+  const K = state.calendarK || {}, kOf = i=>{ const v = Number(K[i]); return v>0 ? v : 1; };
+  const kBase = lastN.reduce((sum,a,i)=>sum+W[i]*kOf(a.monthIndex),0)/ws, kT = kOf(ctx.targetIdx);
+  const items = forecastAccuracyItems().slice(-3);
+  const hT = hist.map(a=>totalsFullCtx(a.inputs,a.plan,a.fact));
+  const cur = ctx.isCurrent ? totalsFullCtx(state.inputs,state.plan,state.fact) : null;
+  const pp = v=> (v>0?"+":"")+Math.round(v*100)+" п.п.";
+  rows.forEach(r=>{
+    if (r.final===null || r.final===undefined) return;
+    r.base = r.final; r.parts = [];
+    const shiftAll = d=>{ r.final = fcClip(r.final+d); ["c20","c40"].forEach(sz=>{ const x=r.bySz[sz]; if (x.final!==null && x.final!==undefined) x.final = fcClip(x.final+d); }); };
+    const step = (k, d, why)=>{ if (!isFinite(d) || Math.abs(d)<0.005) return; const b = r.final; shiftAll(d); const real = r.final-b; if (Math.abs(real)>=0.005) r.parts.push({ k, d:real, why }); };
+    // 1. систематическая ошибка прошлых прогнозов
+    const errs = items.map(it=>{ const f = it.fc.depts[r.key], x = it.act.depts[r.key]; if (!f||!x) return null; const b = f.base!==undefined ? f.base : f.total; return (b===null||b===undefined||x.total===null||x.total===undefined) ? null : x.total-b; }).filter(v=>v!==null);
+    if (errs.length>=2) { const m = errs.reduce((a,b)=>a+b,0)/errs.length; if (Math.abs(m)>=0.02) step("bias", Math.max(-0.12,Math.min(0.12,0.6*m)), "в последних "+errs.length+" мес. факт был "+(m>0?"выше":"ниже")+" прогноза в среднем на "+Math.round(Math.abs(m)*100)+" п.п."); }
+    // 2. календарный коэффициент месяца
+    if (kBase>0 && Math.abs(kT/kBase-1)>=0.01) step("cal", r.final*(kT/kBase-1), "коэффициент "+MONTH_NAMES[ctx.targetIdx].toLowerCase()+" "+kT.toFixed(2)+" против "+kBase.toFixed(2)+" в базовых месяцах");
+    // 3. нагрузка плана: чем плотнее план, тем ниже выполнение (если связь заметна по истории)
+    if (cur && cur.totalVolume>0 && cur.planByDir[r.key]>0 && hist.length>=4) {
+      const pts = hT.map(t=> (t.totalVolume>0 && t.planByDir[r.key]>0) ? { x:t.planByDir[r.key]/t.totalVolume, y:t.factByDir[r.key]/t.planByDir[r.key] } : null);
+      const ok = pts.filter(Boolean);
+      if (ok.length>=4) {
+        const mx = ok.reduce((a,p)=>a+p.x,0)/ok.length, my = ok.reduce((a,p)=>a+p.y,0)/ok.length;
+        let sxy=0,sxx=0,syy=0; ok.forEach(p=>{ sxy+=(p.x-mx)*(p.y-my); sxx+=(p.x-mx)*(p.x-mx); syy+=(p.y-my)*(p.y-my); });
+        const corr = (sxx>1e-9 && syy>1e-9) ? sxy/Math.sqrt(sxx*syy) : 0;
+        if (Math.abs(corr)>=0.5 && sxx>1e-9) {
+          const slope = sxy/sxx;
+          const recent = lastN.map((a,i)=>{ const t=hT[hist.indexOf(a)]; return (t&&t.totalVolume>0) ? W[i]*t.planByDir[r.key]/t.totalVolume : 0; }).reduce((a,b)=>a+b,0)/ws;
+          const now = cur.planByDir[r.key]/cur.totalVolume;
+          step("load", Math.max(-0.10,Math.min(0.10, slope*(now-recent))), "план занимает "+Math.round(now*100)+"% объёма, обычно "+Math.round(recent*100)+"% (связь с выполнением по истории: "+corr.toFixed(2)+")");
+        }
+      }
+    }
+    // 4. ограничение поездами: часть плана, которая идёт поездами, не выполнится лучше поездов
+    if (trainRow.final!==null && trainRow.final!==undefined) {
+      const capIds = CAPACITY_LOCATIONS.map(c=>c.id); let pAll=0, pCap=0;
+      const lastH = hist[hist.length-1];
+      LOCATIONS.forEach(l=>{
+        let p = finalPlanForCtx(state.inputs,state.plan,l.id,r.key); if (!(p>0) && lastH) p = finalPlanForCtx(lastH.inputs,lastH.plan,l.id,r.key);
+        pAll += p; const sel = state.capacitySelection && state.capacitySelection[l.id]; if (capIds.includes(l.id) && sel && sel[r.key]) pCap += p;
+      });
+      const sh = pAll>0 ? pCap/pAll : 0;
+      if (sh>=0.05) { const lim = trainRow.final+0.05, nr = (1-sh)*r.final + sh*Math.min(r.final, lim); step("trains", nr-r.final, "через поезда идёт "+Math.round(sh*100)+"% плана, а поезда выполняют около "+Math.round(trainRow.final*100)+"%"); }
+    }
+    // 5. темп текущего месяца по внесённому факту
+    if (ctx.isCurrent && cur) {
+      const pr = fcProgress(r.key, ctx.targetIdx, ctx.targetYear);
+      if (pr && pr.pt>=0.15 && cur.planByDir[r.key]>0) {
+        const w = pr.pt>=0.999 ? 0.9 : Math.min(0.75, pr.pt*0.9);
+        const cx = { inputs:state.inputs, plan:state.plan, fact:state.fact };
+        const rrT = fcClip((cur.factByDir[r.key]/cur.planByDir[r.key])/pr.pt), before = r.final;
+        r.final = (1-w)*r.final + w*rrT;
+        ["c20","c40"].forEach(sz=>{ const x = r.bySz[sz], d = fcDsPF(cx, r.key, sz); if (x.final!==null && x.final!==undefined && d.p>0) x.final = (1-w)*x.final + w*fcClip((d.f/d.p)/pr.pt); });
+        const real = r.final-before;
+        if (Math.abs(real)>=0.005) r.parts.push({ k:"run", d:real, why: pr.pt>=0.999 ? "месяц внесён полностью, прогноз приближен к факту" : "внесено "+(pr.src==="weeks"?pr.weeks+" нед.":"данные за "+Math.round(pr.pt*100)+"% месяца")+": вывезено "+Math.round(cur.factByDir[r.key]/cur.planByDir[r.key]*100)+"% плана, по темпу выйдет "+Math.round(rrT*100)+"%" });
+      }
+    }
+  });
+}
+// подход следующего месяца в доступные к выдаче контейнеры: % сдачи по истории и ремонт
+function inflowAvail(locId, sz, P){
+  P = Number(P)||0; if (!P) return 0;
+  const i = state.inputs[locId]||{}; let acc = autoAccFor(locId); if (acc===null||acc===undefined) acc = i.acc===undefined ? 100 : i.acc;
+  const fake = { imp20: sz==="c20"?P:0, imp40: sz==="c40"?P:0, acc, rep:i.rep||0, days:i.days||0 };
+  return Math.round(importParts(fake, sz).avail);
+}
+function setCalendarK(i, v){
+  if (!state.calendarK) state.calendarK = {};
+  const n = parseFloat(String(v).replace(",","."));
+  if (!(n>0)) delete state.calendarK[i]; else state.calendarK[i] = Math.round(Math.max(0.3,Math.min(1.5,n))*100)/100;
+  saveAndRender();
+}
+function fcFactorsHtml(rows, tLabel, nLabel){
+  const KS = [["bias","Ошибка прошлых прогнозов"],["cal","Календарь месяца"],["load","Нагрузка плана"],["trains","Поезда"],["run","Темп месяца"]];
+  const pp = v=> (v>0?"+":"")+Math.round(v*100);
+  const body = rows.map(r=>{
+    const cells = KS.map(([k])=>{ const p = (r.parts||[]).find(x=>x.k===k); return p ? '<td class="num-cell" style="text-align:center;font-weight:700;color:'+(p.d>0?'var(--ok)':'var(--danger)')+'" title="'+p.why.replace(/"/g,"'")+'">'+pp(p.d)+'</td>' : '<td class="num-cell muted" style="text-align:center">—</td>'; }).join("");
+    return '<tr><td class="loc-name"><span class="dot" style="background:'+r.color+';margin-right:7px"></span>'+r.label+'</td><td class="num-cell" style="text-align:center">'+(r.base===undefined||r.base===null?"—":Math.round(r.base*100)+"%")+'</td>'+cells+'<td class="num-cell" style="text-align:center;font-weight:800">'+(r.final===null?"—":Math.round(r.final*100)+"%")+'</td></tr>';
+  }).join("");
+  const any = rows.some(r=>(r.parts||[]).length);
+  return '<div class="panel"><p class="panel-title">Что учтено в прогнозе — '+tLabel.toLowerCase()+'</p>'+
+    '<p class="panel-sub">Сначала считается обычный прогноз по истории («База»), затем поправки в процентных пунктах. Наведите на число — увидите причину.'+(any?'':' Сейчас поправок нет: для них пока не хватает данных или условия не сработали.')+'</p>'+
+    '<table><thead><tr><th>Департамент</th><th style="text-align:center">База</th>'+KS.map(([,l])=>'<th style="text-align:center">'+l+'</th>').join("")+'<th style="text-align:center">Итог</th></tr></thead><tbody>'+body+'</tbody></table>'+
+    '<p class="muted" style="font-size:11.5px;margin:8px 0 0">Ошибка прошлых прогнозов — если система систематически занижала или завышала. Календарь — коэффициент месяца (задаётся ниже). Нагрузка плана — чем плотнее план к объёму, тем ниже обычно выполнение (учитывается, когда связь видна по истории). Поезда — часть плана, идущая поездами, не выполнится лучше поездов. Темп месяца — по внесённому факту, в том числе по неделям. Для '+nLabel.toLowerCase()+' работают первые четыре, кроме нагрузки плана.</p></div>';
+}
+function fcCalendarHtml(){
+  const K = state.calendarK || {};
+  const rows = MONTH_NAMES.map((m,i)=>'<tr><td class="loc-name">'+m+'</td><td><div class="numfield" style="width:78px"><input type="text" inputmode="decimal" data-key="ck-'+i+'" value="'+(K[i]>0?String(K[i]).replace(".",","):"")+'" placeholder="1,00" onfocus="this.select()" onchange="setCalendarK('+i+',this.value)" /></div></td></tr>').join("");
+  return '<div class="panel"><p class="panel-title">Календарные коэффициенты месяцев</p>'+
+    '<p class="panel-sub">Как праздники и длинные выходные влияют на вывоз. 1 — обычный месяц, меньше 1 — вывоз ожидаем ниже, больше 1 — выше. Например, январь и февраль можно поставить 0,9. Прогноз сравнивает коэффициент нужного месяца с теми, по которым считалась история, и корректирует результат. Пустое поле — 1. Меняет администратор.</p>'+
+    '<table style="max-width:260px"><thead><tr><th>Месяц</th><th>Коэффициент</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+
 // ожидаемое выполнение по локации × департаменту × типоразмеру
 function fcLocRate(hist, rows){
   const lastN = hist.slice(-3), W = [0.2,0.3,0.5].slice(-lastN.length);
@@ -2133,7 +2242,7 @@ function fcStartStock(locRate, inputs, plan, fact, inflow){
         const done = fact[l.id][d.key][sz]||0;
         evac += Math.max(done, pl*Math.min(rr===null?0:rr,1));
       });
-      r[sz] += Math.max(0, res - evac) + ((inflow && inflow[l.id] && inflow[l.id][sz])||0);
+      r[sz] += Math.max(0, res - evac) + inflowAvail(l.id, sz, (inflow && inflow[l.id] && inflow[l.id][sz])||0);
     });
   });
   return r;
@@ -2145,10 +2254,10 @@ function snapshotForecast(){
   const cur = state.monthCursor % 12;
   const tIdx = (cur+1)%12, tYear = state.currentYear + (cur===11?1:0);
   const ly = state.archive.find(a=>a.monthIndex===tIdx && a.year===tYear-1 && a.inputs && a.plan && a.fact);
-  const core = fcCore(hist, ly);
+  const core = fcCore(hist, ly, { targetIdx:tIdx, targetYear:tYear, isCurrent:false });
   const lr = fcLocRate(hist, core.rows);
   const depts = {};
-  core.rows.forEach(r=>{ depts[r.key] = { total:r.final, c20:r.bySz.c20.final, c40:r.bySz.c40.final }; });
+  core.rows.forEach(r=>{ depts[r.key] = { total:r.final, c20:r.bySz.c20.final, c40:r.bySz.c40.final, base: (r.base!==undefined?r.base:r.final) }; });
   if (!state.forecastLog) state.forecastLog = [];
   state.forecastLog = state.forecastLog.filter(x=>!(x.targetIdx===tIdx && x.targetYear===tYear));
   state.forecastLog.push({ targetIdx:tIdx, targetYear:tYear, madeIn: MONTH_NAMES[cur],
@@ -2273,7 +2382,7 @@ function forecastParts(V0){
   const W = [0.2,0.3,0.5].slice(-lastN.length);
 
   const dsPF = fcDsPF;
-  const _core = fcCore(hist, ly);
+  const _core = fcCore(hist, ly, { targetIdx:tIdx, targetYear:tYear, isCurrent:!!V0 });
   const rows = _core.rows, trainRow = _core.trainRow;
   const tLy = trainRow.lyRate;
 
@@ -2281,7 +2390,7 @@ function forecastParts(V0){
   const tail = hist.slice(-6), off = hist.length - tail.length;
   // для текущего месяца график продлевается ещё на следующий (со своей поправкой на прошлый год, если она есть)
   const lyN = state.archive.find(a=>a.monthIndex===nIdx && a.year===nYear-1 && a.inputs && a.plan && a.fact);
-  const coreN = V0 ? fcCore(hist, lyN) : null;
+  const coreN = V0 ? fcCore(hist, lyN, { targetIdx:nIdx, targetYear:nYear, isCurrent:false }) : null;
   const nextFinal = r=>{
     if (!coreN) return null;
     if (!r.bySz) return coreN.trainRow.final;
@@ -2355,7 +2464,7 @@ function forecastParts(V0){
   const nextPlan = (l, dKey, sz)=>{
     const i = state.inputs[l.id];
     const norm = sz==="c20" ? (i.norm20||0) : (i.norm40||0);
-    const start = endOf(l,sz) + (((state.forecastInflow||{})[l.id]||{})[sz]||0);
+    const start = endOf(l,sz) + inflowAvail(l.id, sz, (((state.forecastInflow||{})[l.id]||{})[sz]||0));
     const sur = Math.max(0, start - norm);
     const tot = DIRECTIONS.reduce((a,d)=>a+finalPlanSizeForCtx(state.inputs,state.plan,l.id,d.key,sz),0);
     const mine = finalPlanSizeForCtx(state.inputs,state.plan,l.id,dKey,sz);
@@ -2443,7 +2552,7 @@ function forecastParts(V0){
       });
       const end = Math.max(0, res - evac);
       const inf = state.forecastInflow[l.id][sz]||0;
-      const start = end + inf;
+      const start = end + inflowAvail(l.id, sz, inf);
       const sur = Math.max(0, start - norm);
       acc[sz].start+=start; acc[sz].sur+=sur; acc[sz].inf+=inf; acc[sz].end+=end;
       cells.end += '<td class="num-cell" style="text-align:center" title="ресурс '+fmt(res)+' − ожидаемый вывоз ~'+fmt(evac)+'">'+fmt(end)+'</td>';
@@ -2464,7 +2573,7 @@ function forecastParts(V0){
   const stockPanel = '<div class="panel"><p class="panel-title">Сток: конец '+monthOf(curLabel)+' → начало '+monthOf(nLabel)+'</p>'+
     '<p class="panel-sub"><b>Остаток на конец '+monthOf(curLabel)+'</b> = ресурс с «Ввода данных» (сток + подход '+monthOf(curLabel)+') − ожидаемый вывоз. '+
     '<b>Подход '+monthOf(nLabel)+'</b> вносится здесь — это не тот подход, что на «Вводе данных». '+
-    '<b>Сток на начало</b> = остаток + подход. <b>Излишек</b> = сток на начало − текущая норма — от него считается план и риск '+monthOf(nLabel)+' выше.</p>'+
+    '<b>Сток на начало</b> = остаток + подход (подход пересчитывается в доступный к выдаче: по % сдачи из истории и ремонту). <b>Излишек</b> = сток на начало − текущая норма — от него считается план и риск '+monthOf(nLabel)+' выше.</p>'+
     '<table><thead><tr><th rowspan="2">Локация</th>'+grp("Остаток на конец "+monthOf(curLabel))+grp("Подход "+monthOf(nLabel)+" (ввод)")+grp("Сток на начало "+monthOf(nLabel))+grp("Излишек к эвакуации")+'</tr><tr>'+sub+sub+sub+sub+'</tr></thead>'+
     '<tbody>'+sRows+sFoot+'</tbody></table></div>';
 
@@ -2527,7 +2636,8 @@ function forecastParts(V0){
     (function(){ const m=forecastMAE(); return m ? ' <b>Средняя ошибка прошлых прогнозов: ±'+Math.round(m.mae*100)+' п.п.</b> (по '+m.months+' мес., сравнение внизу листа)' : ''; })()+'</div>'+
     '</div><div></div></div>';
 
-  return { tLabel, tYear, curLabel, nLabel, nYear, hist, head, execPanel, riskPanel, stockPanel, yoyPanel, riskSum, hasLy: !!ly };
+  const factorsPanel = fcFactorsHtml(rows, tLabel, nLabel);
+  return { tLabel, tYear, curLabel, nLabel, nYear, hist, head, execPanel, factorsPanel, riskPanel, stockPanel, yoyPanel, riskSum, hasLy: !!ly };
 }
 
 function renderForecastTab(){
@@ -2561,7 +2671,7 @@ function renderForecastTab(){
     card(P0, P0.tLabel+' '+P0.tYear+' — текущий', 'реальный план и внесённый факт')+
     card(P1, P1.tLabel+' '+P1.tYear+' — следующий', 'план = излишек на начало месяца')+'</div>';
   const yoy = (P0.hasLy ? P0.yoyPanel : '') + (P1.hasLy ? P1.yoyPanel : '') + (!P0.hasLy && !P1.hasLy ? P1.yoyPanel : '');
-  return head + cards + P0.execPanel + P0.riskPanel + P1.riskPanel + P1.stockPanel + yoy + renderForecastAccuracy();
+  return head + cards + P0.execPanel + P0.factorsPanel + fcCalendarHtml() + P0.riskPanel + P1.riskPanel + P1.stockPanel + yoy + renderForecastAccuracy();
 }
 
 function renderArchiveTab(){
@@ -3153,6 +3263,7 @@ function bootCheck(){
 // ---------- ограничения на экране ----------
 function areaOfKey(k){
   let m;
+  if (/^ck-\d+$/.test(k)) return "meta";
   if (/^(res20|res40)-/.test(k)) return "stock";
   if (/^(norm20|norm40|acc|rep|days)-/.test(k)) return "inputs_other";
   if (/^(imp20|imp40)-/.test(k)) return "import_plan";
@@ -3781,8 +3892,8 @@ function adminExtraHtml(){
     '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evAll"'+chk("evAll")+'> Администратору: все отделы подтвердили данные</label>'+
     '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evClosed"'+chk("evClosed")+'> Всем: месяц закрыт</label>'+
     '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evRemind"'+chk("evRemind")+'> Отделам: напоминание за день до срока и в день срока (в 9:00 по Москве)</label>'+
-    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evWeekly"'+chk("evWeekly")+'> Недельный отчёт: каждый понедельник в 9:00 по Москве (администратору, руководителю, отчётности)</label>'+
-    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evPlans"'+chk("evPlans")+'> Отчёт с планами всех департаментов, когда все подтвердили планы (администратору, руководителю, отчётности)</label>'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evWeekly"'+chk("evWeekly")+'> Недельный отчёт: каждый понедельник в 9:00 по Москве (администраторам и тем, у кого отмечено «Руководитель направления»)</label>'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evPlans"'+chk("evPlans")+'> Отчёт с планами всех департаментов, когда все подтвердили планы (всем, у кого указан e-mail)</label>'+
     '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evCloseRpt"'+chk("evCloseRpt")+'> Отчёт по закрытию месяца (администратору, руководителю, отчётности)</label></div>'+
     (ONLINE.mailMsg ? '<div class="adm-warn" style="margin:0 0 10px;'+(ONLINE.mailMsg.ok?'':'background:#FBECEC;border-color:#E3A9AA')+'">'+esc(ONLINE.mailMsg.text)+'</div>' : '')+'<div class="adm-actions"><button class="btn btn-primary" onclick="mailSave()">Сохранить</button> <input class="fld fld-sm" id="mc_test" type="email" placeholder="e-mail для проверки"> <button class="btn" onclick="mailTest()">Отправить тест</button> <button class="btn" onclick="mailReportNow(\'weekly\')">Прислать недельный отчёт сейчас</button> <button class="btn" onclick="mailReportNow(\'close\')">Прислать отчёт последнего закрытого месяца</button> <button class="btn" onclick="mailReportNow(\'plans\')">Прислать отчёт по планам сейчас</button></div>'+
     ((ONLINE.mailLog||[]).length ? '<table style="margin-top:12px"><thead><tr><th>Когда</th><th>Кому</th><th>Тема</th><th>Результат</th></tr></thead><tbody>'+ONLINE.mailLog.slice(0,8).map(m=>'<tr><td>'+fmtTime(m.t)+'</td><td>'+esc(m.to)+'</td><td>'+esc(m.s)+'</td><td>'+(m.ok?'отправлено':'<span style="color:var(--danger)">'+esc(m.err||"ошибка")+'</span>')+'</td></tr>').join("")+'</tbody></table>' : '');

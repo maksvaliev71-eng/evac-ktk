@@ -221,7 +221,7 @@ function mailErrText(e) {
 }
 let mailChain = Promise.resolve();
 function sendMail(rcpts, subject, text, html) {
-  rcpts = [...new Set(rcpts.filter(Boolean))];
+  { const seen = new Set(); rcpts = rcpts.filter(Boolean).filter(a => { const k = addrOnly(a).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; }); }
   if (!mailCfg.enabled || !mailCfg.host || !rcpts.length) return mailChain;
   const full = (mailCfg.siteUrl ? text + "\n\n" + mailCfg.siteUrl : text);
   const fullHtml = html ? (mailCfg.siteUrl ? html + '<p style="font:13px Arial;color:#667"><a href="' + escH(mailCfg.siteUrl) + '">' + escH(mailCfg.siteUrl) + "</a></p>" : html) : null;
@@ -303,13 +303,15 @@ function plansReport() {
   return { subject: "Планы подтверждены — " + sn.label, text: txt, html: wrapHtml("Планы всех департаментов: " + sn.label, html) };
 }
 const reportRcpts = () => emailsOf(u => u.dept === "admin" || u.dept === "manager" || u.dept === "viewer");
-function sendReport(r) { if (r) return sendMail(reportRcpts(), r.subject, r.text, r.html); return Promise.resolve(); }
+const weeklyRcpts = () => emailsOf(u => u.dept === "admin" || u.head);
+const plansRcpts = () => emailsOf(() => true);
+function sendReport(r, rcpts) { if (r) return sendMail(rcpts || reportRcpts(), r.subject, r.text, r.html); return Promise.resolve(); }
 function weeklyCheck() {
   if (!mailCfg.enabled || !mailCfg.evWeekly) return;
   const msk = new Date(Date.now() + 3 * 3600000), today = mskToday();
   if (msk.getUTCDay() !== 1 || msk.getUTCHours() < 9 || ext.lastWeekly === today) return;
   const r = weeklyReport(); if (!r) return;
-  ext.lastWeekly = today; writeJson(EXT_F, ext); sendReport(r);
+  ext.lastWeekly = today; writeJson(EXT_F, ext); sendReport(r, weeklyRcpts());
 }
 
 // ---------- автоматические резервные копии ----------
@@ -452,7 +454,7 @@ const server = http.createServer(async (req, res) => {
         addLogText(me, "Подтвердил(а): " + KIND_LABEL[kind] + " готов");
         if (kind === "plan" && plansAllReady() && !ext.plansReported) {
           ext.plansReported = true;
-          if (mailCfg.enabled && mailCfg.evPlans) setTimeout(() => { try { sendReport(plansReport()); } catch (e) { console.error("plansReport:", e.message); } }, 10000);
+          if (mailCfg.enabled && mailCfg.evPlans) setTimeout(() => { try { sendReport(plansReport(), plansRcpts()); } catch (e) { console.error("plansReport:", e.message); } }, 10000);
         }
         if (mailCfg.evReady) mailAdmins("Готово: " + DEPT_LABEL[dept] + " — " + KIND_LABEL[kind], DEPT_LABEL[dept] + ": " + KIND_LABEL[kind] + " подтверждён (" + me.name + ").");
         if (mailCfg.evAll && allReady()) mailAdmins("Все департаменты подтвердили данные", "Все департаменты подтвердили план, факт и остальные данные. Месяц можно закрывать.");
@@ -623,9 +625,9 @@ const server = http.createServer(async (req, res) => {
       if (me.dept !== "admin") return send(res, 403, { error: "Только администратор" });
       const b = await readBody(req, 2000), r = b.type === "close" ? closeReport() : b.type === "plans" ? plansReport() : weeklyReport();
       if (!r) return send(res, 400, { error: b.type === "close" ? "Нет закрытых месяцев в архиве" : "Пока нет данных для отчёта: внесите или измените любое значение в данных" });
-      const to = reportRcpts(); if (!to.length) return send(res, 400, { error: "Не заполнен ни один адрес у администратора, руководителя или отчётности" });
+      const to = b.type === "plans" ? plansRcpts() : b.type === "close" ? reportRcpts() : weeklyRcpts(); if (!to.length) return send(res, 400, { error: b.type === "plans" ? "Ни у кого не заполнен адрес" : b.type === "close" ? "Не заполнен адрес у администратора, руководителя или отчётности" : "Не заполнен адрес у администратора или руководителя направления (галочка в списке пользователей)" });
       if (!mailCfg.enabled) return send(res, 400, { error: "Отправка уведомлений выключена" });
-      await sendReport(r); const l = mailLog[0]; return l && !l.ok ? send(res, 400, { error: l.err }) : send(res, 200, { ok: true, to });
+      await sendReport(r, to); const l = mailLog[0]; return l && !l.ok ? send(res, 400, { error: l.err }) : send(res, 200, { ok: true, to });
     }
     if (p === "/api/mail/test" && req.method === "POST") {
       const b = await readBody(req, 2000), to = String(b.to || "").trim();

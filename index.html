@@ -551,7 +551,7 @@ function effRes(i, sz){
   if (!pt.plan) return raw;
   return Math.max(0, Math.round(raw + pt.avail));
 }
-function zeroInputRow(prev){ return { resource20:0, norm20:0, resource40:0, norm40:0, imp20:0, imp40:0, impF20:0, impF40:0,
+function zeroInputRow(prev){ return { resource20:0, norm20:0, resource40:0, norm40:0, imp20:0, imp40:0, impF20:0, impF40:0, stockNow20:0, stockNow40:0, stockNowTs:0,
   acc: prev&&prev.acc!==undefined?prev.acc:100, rep: prev&&prev.rep||0, days: prev&&prev.days||0 }; }
 function prevInputRow(id){ try { return state && state.inputs ? state.inputs[id] : null; } catch(e){ return null; } }
 function defaultInputsFor(){ const o={}; LOCATIONS.forEach(l=>o[l.id]=zeroInputRow(prevInputRow(l.id))); return o; }
@@ -912,6 +912,48 @@ function setFactWeek(locId, deptKey, w, sizeKey, value){
 }
 const FACT_WEEKS = ["1–7","8–14","15–21","22–28","29–31"];
 window.__fw = window.__fw || { open:false, dept:null };
+function setImpFactWeek(locId, w, sizeKey, value){
+  const i = state.inputs[locId], wk = "impFw"+w+"_"+sizeKey, tk = sizeKey==="20" ? "impF20" : "impF40", nv = Math.max(0, Number(value)||0);
+  i[tk] = Math.max(0, (i[tk]||0) + nv - (i[wk]||0)); i[wk] = nv; saveAndRender();
+}
+function setStockNow(locId, sizeKey, value){
+  const i = state.inputs[locId]; i["stockNow"+sizeKey] = Math.max(0, Number(value)||0); i.stockNowTs = Date.now(); saveAndRender();
+}
+function applyStockNow(){
+  if (!confirm("Подставить актуальный сток в расчёт? Поля «Сток 20'/40'» на вводе данных будут заменены по всем локациям, где актуальный сток внесён.")) return;
+  LOCATIONS.forEach(l=>{ const i = state.inputs[l.id]; if (i.stockNowTs) { i.resource20 = i.stockNow20||0; i.resource40 = i.stockNow40||0; } });
+  saveAndRender();
+}
+function snowHtml(){
+  const rows = LOCATIONS.map(l=>{
+    const i = state.inputs[l.id], ts = i.stockNowTs ? new Date(i.stockNowTs) : null;
+    const d20 = i.stockNowTs ? (i.stockNow20||0)-(i.resource20||0) : 0, d40 = i.stockNowTs ? (i.stockNow40||0)-(i.resource40||0) : 0;
+    const dl = v=> v===0 ? '<span class="muted">0</span>' : '<span style="color:'+(v>0?'var(--ok)':'var(--danger)')+'">'+(v>0?'+':'')+fmt(v)+'</span>';
+    return '<tr><td class="loc-name">'+l.name+'</td>'+
+      '<td>'+numField('snow20-'+l.id, i.stockNow20||0, "hsn_"+l.id+"_20")+'</td>'+
+      '<td>'+numField('snow40-'+l.id, i.stockNow40||0, "hsn_"+l.id+"_40")+'</td>'+
+      '<td class="num-cell">20\': '+dl(d20)+'<br>40\': '+dl(d40)+'</td>'+
+      '<td class="muted" style="font-size:12px">'+(ts ? ts.toLocaleDateString("ru-RU",{day:"2-digit",month:"2-digit"})+" "+ts.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"}) : "—")+'</td></tr>';
+  }).join("");
+  return '<div class="panel"><p class="panel-title">Актуальный сток</p>'+
+    expl('фактический сток на локациях на сегодня, его вносит Эксплуатация.','Это отдельное поле: расчёт распределения оно не меняет. Рядом показана разница с «Стоком» из расчёта (плюс — на месте больше, чем учтено). Дата проставляется сама при внесении. Если нужно, кнопка внизу подставляет актуальный сток в расчёт.')+
+    '<div style="overflow-x:auto"><table><thead><tr><th>Локация</th><th>Сток 20\', шт</th><th>Сток 40\', шт</th><th>Разница с расчётом</th><th>Обновлено</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '<div style="margin-top:10px"><button class="btn" onclick="applyStockNow()">Подставить актуальный сток в расчёт</button></div></div>';
+}
+window.__iw = window.__iw || { open:false };
+function iwToggle(){ window.__iw.open = !window.__iw.open; render(); }
+function impFactWeeklyHtml(){
+  const head = '<div style="margin-top:14px"><button class="btn" onclick="iwToggle()">'+(window.__iw.open?"▾ Скрыть факт подхода по неделям":"▸ Факт подхода импорта по неделям")+'</button></div>';
+  if (!window.__iw.open) return head;
+  const rows = LOCATIONS.map(l=>{
+    const i = state.inputs[l.id]; let s20=0, s40=0;
+    const cells = FACT_WEEKS.map((_,w)=>{ s20 += i["impFw"+w+"_20"]||0; s40 += i["impFw"+w+"_40"]||0;
+      return '<td><div class="cell-pair">'+numField('iw-'+l.id+'-'+w+'-20', i["impFw"+w+"_20"]||0, "hiw_"+l.id+"_"+w+"_20")+numField('iw-'+l.id+'-'+w+'-40', i["impFw"+w+"_40"]||0, "hiw_"+l.id+"_"+w+"_40")+'</div></td>'; }).join("");
+    return '<tr><td class="loc-name">'+l.name+'</td>'+cells+'<td class="num-cell muted">20\': '+fmt((i.impF20||0)-s20)+'<br>40\': '+fmt((i.impF40||0)-s40)+'</td><td class="num-cell" style="font-weight:600">'+fmt((i.impF20||0)+(i.impF40||0))+' шт</td></tr>';
+  }).join("");
+  return head+'<p class="panel-sub" style="margin-top:8px">Вносите факт подхода за неделю: итог месяца («Факт подхода» выше) пересчитается сам. Недели по числам месяца. «Без недели» — то, что внесено сразу итогом.</p>'+
+    '<div style="overflow-x:auto"><table><thead><tr><th>Локация</th>'+FACT_WEEKS.map(x=>'<th>'+x+'<div class="dept-sub">20\' / 40\', шт</div></th>').join("")+'<th>Без недели</th><th>Итого</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
 function fwToggle(){ window.__fw.open = !window.__fw.open; render(); }
 function fwDept(d){ window.__fw.dept = d; render(); }
 function factWeeklyHtml(){
@@ -1328,7 +1370,7 @@ function renderRepairPanel(){
   return '<div class="panel"><p class="panel-title">Сдача импорта и ремонт (необязательно)</p>'+
     expl('Подход импорта прибавляется к стоку не целиком: приедет только часть, а часть приехавшего уйдёт в ремонт и в выдачу не годится, пока не отремонтируется.',
       'В «Сток» выше вносите только текущий сток. Здесь — план подхода импорта на месяц (шт) и один раз на локацию: % в ремонт и средний срок ремонта (дней); % сдачи вручную нужен только пока нет истории. Сдача считается равномерной по месяцу: контейнеры, пришедшие в последние «срок» дней, не успевают и переходят в следующий месяц. Факт подхода вносите по мере прихода; при закрытии месяца он попадает в историю, и % сдачи считается сам (факт ÷ план за закрытые месяцы). К стоку прибавляется весь подход, а в распределение идёт только «доступно». Пример: 1000 × 70% × 50% ремонта, 20 дней → доступно 467, не доехало 300, в ремонте на след. месяц 233. Пусто или 0 — расчёт не меняется. Настройки (%, дни) переносятся в новый месяц, подход обнуляется.')+
-    '<table><thead><tr><th>Локация</th><th>План подхода 20\', шт</th><th>План подхода 40\', шт</th><th>Факт подхода 20\', шт</th><th>Факт подхода 40\', шт</th><th>% сдачи</th><th>% в ремонт</th><th>Срок ремонта, дн</th><th>Доступно из подхода</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+    '<table><thead><tr><th>Локация</th><th>План подхода 20\', шт</th><th>План подхода 40\', шт</th><th>Факт подхода 20\', шт</th><th>Факт подхода 40\', шт</th><th>% сдачи</th><th>% в ремонт</th><th>Срок ремонта, дн</th><th>Доступно из подхода</th></tr></thead><tbody>'+rows+'</tbody></table>'+impFactWeeklyHtml()+'</div>';
 }
 function renderInputTab(){
   let rows = LOCATIONS.map(l=>{
@@ -1354,7 +1396,7 @@ function renderInputTab(){
     '<p class="panel-sub">Всё в штуках. Ресурс = сток + весь подход импорта (подход вносится ниже, в блоке «Сдача импорта и ремонт»). В распределение идёт только сток + доступная часть подхода: не доехавшее и ремонт не учитываются. Объём к эвакуации = эта сумма − Норма. «Расчёт по поездам» — подсказка из вкладки «Поезда», применяется только по кнопке.</p>'+
     '<table><thead><tr><th>Локация</th><th>Сток 20\', шт</th><th>Сток 40\', шт</th>'+
     '<th>Норма 20\', шт</th><th>Норма 40\', шт</th><th>Расчёт по поездам</th><th>Ресурс (сток + весь подход)</th><th>Не учитывается (не доехало + ремонт)</th><th>В распределение (сток + доступно)</th><th>Объём к эвакуации, шт</th></tr></thead>'+
-    '<tbody>'+rows+'</tbody></table></div>'+renderRepairPanel();
+    '<tbody>'+rows+'</tbody></table></div>'+snowHtml()+renderRepairPanel();
 }
 
 function renderDistributeTab(){
@@ -2135,18 +2177,18 @@ function fcApplyAdjust(rows, trainRow, hist, ctx){
     const step = (k, d, why)=>{ if (!isFinite(d) || Math.abs(d)<0.005) return; const b = r.final; shiftAll(d); const real = r.final-b; if (Math.abs(real)>=0.005) r.parts.push({ k, d:real, why }); };
     // 1. систематическая ошибка прошлых прогнозов
     const errs = items.map(it=>{ const f = it.fc.depts[r.key], x = it.act.depts[r.key]; if (!f||!x) return null; const b = f.base!==undefined ? f.base : f.total; return (b===null||b===undefined||x.total===null||x.total===undefined) ? null : x.total-b; }).filter(v=>v!==null);
-    if (errs.length>=2) { const m = errs.reduce((a,b)=>a+b,0)/errs.length; if (Math.abs(m)>=0.02) step("bias", Math.max(-0.12,Math.min(0.12,0.6*m)), "в последних "+errs.length+" мес. факт был "+(m>0?"выше":"ниже")+" прогноза в среднем на "+Math.round(Math.abs(m)*100)+" п.п."); }
+    if (errs.length>=3 && (errs.every(e=>e>0) || errs.every(e=>e<0))) { const m = errs.reduce((a,b)=>a+b,0)/errs.length; if (Math.abs(m)>=0.05) step("bias", Math.max(-0.10,Math.min(0.10,0.5*m)), "в последних "+errs.length+" мес. подряд факт был "+(m>0?"выше":"ниже")+" прогноза в среднем на "+Math.round(Math.abs(m)*100)+" п.п."); }
     // 2. календарный коэффициент месяца
     if (kBase>0 && Math.abs(kT/kBase-1)>=0.01) step("cal", r.final*(kT/kBase-1), "коэффициент "+MONTH_NAMES[ctx.targetIdx].toLowerCase()+" "+kT.toFixed(2)+" против "+kBase.toFixed(2)+" в базовых месяцах");
     // 3. нагрузка плана: чем плотнее план, тем ниже выполнение (если связь заметна по истории)
-    if (cur && cur.totalVolume>0 && cur.planByDir[r.key]>0 && hist.length>=4) {
+    if (cur && cur.totalVolume>0 && cur.planByDir[r.key]>0 && hist.length>=6) {
       const pts = hT.map(t=> (t.totalVolume>0 && t.planByDir[r.key]>0) ? { x:t.planByDir[r.key]/t.totalVolume, y:t.factByDir[r.key]/t.planByDir[r.key] } : null);
       const ok = pts.filter(Boolean);
-      if (ok.length>=4) {
+      if (ok.length>=6) {
         const mx = ok.reduce((a,p)=>a+p.x,0)/ok.length, my = ok.reduce((a,p)=>a+p.y,0)/ok.length;
         let sxy=0,sxx=0,syy=0; ok.forEach(p=>{ sxy+=(p.x-mx)*(p.y-my); sxx+=(p.x-mx)*(p.x-mx); syy+=(p.y-my)*(p.y-my); });
         const corr = (sxx>1e-9 && syy>1e-9) ? sxy/Math.sqrt(sxx*syy) : 0;
-        if (Math.abs(corr)>=0.5 && sxx>1e-9) {
+        if (Math.abs(corr)>=0.7 && sxx>1e-9) {
           const slope = sxy/sxx;
           const recent = lastN.map((a,i)=>{ const t=hT[hist.indexOf(a)]; return (t&&t.totalVolume>0) ? W[i]*t.planByDir[r.key]/t.totalVolume : 0; }).reduce((a,b)=>a+b,0)/ws;
           const now = cur.planByDir[r.key]/cur.totalVolume;
@@ -2840,6 +2882,7 @@ function render(){
 
 // per-field handlers
 LOCATIONS.forEach(l=>{
+  ["20","40"].forEach(sz=>{ window["hsn_"+l.id+"_"+sz] = v=>setStockNow(l.id,sz,v); for (let w=0; w<5; w++) window["hiw_"+l.id+"_"+w+"_"+sz] = v=>setImpFactWeek(l.id,w,sz,v); });
   ["resource20","resource40","norm20","norm40","imp20","imp40","impF20","impF40","acc","rep","days"].forEach(field=>{
     window["h_"+l.id+"_"+field] = (v)=> setInputField(l.id, field, v);
   });
@@ -2909,7 +2952,7 @@ const DEFAULT_PERMS = {
   rail:["routes"],
   expl:["fact_expl","import_fact","stock"],
 };
-const IMP_FIELDS = ["imp20","imp40","impF20","impF40"];
+const IMP_FIELDS = ["imp20","imp40","impF20","impF40"]; for (let i=0;i<5;i++) IMP_FIELDS.push("impFw"+i+"_20","impFw"+i+"_40");
 const META_EXCL = new Set(["reasons","tab","forecastView","inputs","routes","plan","fact","distributionShares","capacitySelection","capacityTeu","planningHorizon","forecastLog","forecastInflow","archive","next"]);
 
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
@@ -2989,6 +3032,8 @@ function canWriteArea(a){
     else if (a==="inputs_other") ok = P.includes("inputs");
     else if (a==="inputs" || a==="stock") ok = P.includes("inputs") || P.includes("stock");
     else if (a==="import_plan") ok = P.includes("import");
+    else if (a==="import_factw") ok = P.includes("import_fact");
+    else if (a==="stock_now") ok = P.includes("stock");
     else ok = P.includes(a);
     if (!ok) return false; }
   try { if (ONLINE.server && AREA_TO_KIND[a] && deadlineLockedClient(AREA_TO_KIND[a])) return false; } catch(e){}
@@ -3265,6 +3310,8 @@ function areaOfKey(k){
   let m;
   if (/^ck-\d+$/.test(k)) return "meta";
   if (/^(res20|res40)-/.test(k)) return "stock";
+  if (/^snow(20|40)-/.test(k)) return "stock_now";
+  if (/^iw-/.test(k)) return "import_factw";
   if (/^(norm20|norm40|acc|rep|days)-/.test(k)) return "inputs_other";
   if (/^(imp20|imp40)-/.test(k)) return "import_plan";
   if (/^(impf20|impf40)-/.test(k)) return "import_fact";
@@ -3278,7 +3325,7 @@ function areaOfKey(k){
   if (/^aedit/.test(k)) return "archive";
   return null;
 }
-const BTN_AREAS = { toggleRouteLimit:"routes", toggleCapacityDept:"trainsCfg", applyComputedNorm:"inputs_other", closeMonth:"meta", toggleArchiveEdit:"archive" };
+const BTN_AREAS = { toggleRouteLimit:"routes", toggleCapacityDept:"trainsCfg", applyComputedNorm:"inputs_other", applyStockNow:"stock_now", closeMonth:"meta", toggleArchiveEdit:"archive" };
 function applyPerms(){
   if (!ONLINE.me) return;
   document.querySelectorAll("#content input[data-key]").forEach(el=>{
@@ -3826,8 +3873,8 @@ async function loadAdminExtras(){
 }
 async function mailSave(quiet){
   const g = id=>document.getElementById(id), body = {
-    enabled:g("mc_enabled").checked, host:g("mc_host").value, port:g("mc_port").value, mode:g("mc_mode").value, user:g("mc_user").value, from:g("mc_from").value, siteUrl:g("mc_site").value,
-    evReady:g("mc_evReady").checked, evAll:g("mc_evAll").checked, evClosed:g("mc_evClosed").checked, evRemind:g("mc_evRemind").checked, evWeekly:g("mc_evWeekly").checked, evCloseRpt:g("mc_evCloseRpt").checked, evPlans:g("mc_evPlans").checked };
+    enabled:g("mc_enabled").checked, host:g("mc_host").value, port:g("mc_port").value, mode:g("mc_mode").value, user:g("mc_user").value, from:g("mc_from").value, siteUrl:g("mc_site").value, weeklyDay:g("mc_weeklyDay").value,
+    evReady:true, evAll:true, evClosed:true, evRemind:true, evWeekly:true, evCloseRpt:true, evPlans:true };
   if (g("mc_pass").value) body.pass = g("mc_pass").value;
   try { await api("PUT","/api/mail",body); if (!quiet) { ONLINE.mailMsg = { ok:true, text:"Настройки почты сохранены." }; await loadAdminExtras(); render(); } } catch(e){ ONLINE.mailMsg = { ok:false, text:"Не удалось сохранить: "+((e&&e.message)||e) }; if (quiet) throw e; render(); }
 }
@@ -3874,7 +3921,12 @@ function adminExtraHtml(){
   if (!srvOn()) return "";
   const c = ONLINE.mailCfg;
   const users = Object.keys(ONLINE.users).map(id=>({id, ...ONLINE.users[id]})).sort((a,b)=>a.name.localeCompare(b.name,"ru"));
-  const erows = users.map(u=>'<tr><td class="loc-name">'+esc(u.name)+'</td><td>'+esc(deptLabel(u.dept))+'</td><td><input class="fld" id="em_'+u.id+'" type="email" value="'+esc(u.email||"")+'" placeholder="name@company.ru"></td><td><button class="btn" onclick="emailSave(\''+u.id+'\')">Сохранить</button></td></tr>').join("");
+  const SUBS = [["ready","Готово","Отдел нажал «Готово»"],["all","Все готово","Все отделы подтвердили данные"],["closed","Месяц закрыт","Администратор закрыл месяц"],["remind","Напомин.","Напоминания о сроках своего отдела: за день и в день срока, 9:00 по Москве"],["weekly","Недельный","Недельный отчёт в выбранный день недели, 9:00 по Москве"],["closeRpt","Итоги месяца","Отчёт при закрытии месяца"],["plans","Планы","Отчёт с планами всех департаментов, когда все подтвердили планы"]];
+  const erows = users.map(u=>'<tr><td class="loc-name" style="white-space:nowrap">'+esc(u.name)+'<div class="muted" style="font-size:11px">'+esc(deptLabel(u.dept))+'</div></td>'+
+    '<td><input class="fld fld-sm" style="min-width:190px" id="em_'+u.id+'" type="email" value="'+esc(u.email||"")+'" placeholder="name@company.ru" onchange="emailSave(\''+u.id+'\')"></td>'+
+    SUBS.map(([k,,tip])=>'<td style="text-align:center"><input type="checkbox" title="'+esc(tip)+'" '+((u.subs&&u.subs[k])?'checked ':'')+(u.email?'':'disabled ')+'onchange="subSet(\''+u.id+'\',\''+k+'\',this.checked)"></td>').join("")+'</tr>').join("");
+  const subsTable = '<div style="overflow-x:auto"><table><thead><tr><th>Сотрудник</th><th>E-mail</th>'+SUBS.map(([,l,tip])=>'<th style="text-align:center;font-size:11px;white-space:nowrap" title="'+esc(tip)+'">'+l+'</th>').join("")+'</tr></thead><tbody>'+erows+'</tbody></table></div>'+
+    '<div class="adm-actions" style="margin-top:10px;align-items:center"><button class="btn" onclick="subsResetAll()">Вернуть стандартные настройки</button><span class="muted" style="font-size:12px">Отметки сохраняются сразу. Без адреса письма не приходят. Наведите на заголовок колонки, чтобы увидеть, что это за письмо.</span></div>';
   const sel = (v)=>c && c.mode===v ? " selected" : "";
   const chk = (k)=>c && c[k] ? " checked" : "";
   const mailForm = !c ? '<p class="muted">Загрузка…</p>' :
@@ -3888,20 +3940,15 @@ function adminExtraHtml(){
     '<div><label class="auth-l" for="mc_site">Ссылка на сайт в письмах</label><input class="fld" id="mc_site" value="'+esc(c.siteUrl)+'" placeholder="http://79.174.83.208"></div></div>'+
     '<div style="margin:12px 0;display:grid;gap:6px">'+
     '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_enabled"'+chk("enabled")+'> <b>Отправлять уведомления</b></label>'+
-    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evReady"'+chk("evReady")+'> Администратору: отдел нажал «Готово»</label>'+
-    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evAll"'+chk("evAll")+'> Администратору: все отделы подтвердили данные</label>'+
-    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evClosed"'+chk("evClosed")+'> Всем: месяц закрыт</label>'+
-    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evRemind"'+chk("evRemind")+'> Отделам: напоминание за день до срока и в день срока (в 9:00 по Москве)</label>'+
-    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evWeekly"'+chk("evWeekly")+'> Недельный отчёт: каждый понедельник в 9:00 по Москве (администраторам и тем, у кого отмечено «Руководитель направления»)</label>'+
-    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evPlans"'+chk("evPlans")+'> Отчёт с планами всех департаментов, когда все подтвердили планы (всем, у кого указан e-mail)</label>'+
-    '<label class="auth-chk" style="margin:0"><input type="checkbox" id="mc_evCloseRpt"'+chk("evCloseRpt")+'> Отчёт по закрытию месяца (администратору, руководителю, отчётности)</label></div>'+
-    (ONLINE.mailMsg ? '<div class="adm-warn" style="margin:0 0 10px;'+(ONLINE.mailMsg.ok?'':'background:#FBECEC;border-color:#E3A9AA')+'">'+esc(ONLINE.mailMsg.text)+'</div>' : '')+'<div class="adm-actions"><button class="btn btn-primary" onclick="mailSave()">Сохранить</button> <input class="fld fld-sm" id="mc_test" type="email" placeholder="e-mail для проверки"> <button class="btn" onclick="mailTest()">Отправить тест</button> <button class="btn" onclick="mailReportNow(\'weekly\')">Прислать недельный отчёт сейчас</button> <button class="btn" onclick="mailReportNow(\'close\')">Прислать отчёт последнего закрытого месяца</button> <button class="btn" onclick="mailReportNow(\'plans\')">Прислать отчёт по планам сейчас</button></div>'+
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label class="auth-l" for="mc_weeklyDay" style="margin:0">Недельный отчёт отправлять в</label><select class="fld fld-sm" id="mc_weeklyDay" style="width:auto">'+["понедельник","вторник","среду","четверг","пятницу","субботу","воскресенье"].map((n,i)=>'<option value="'+(i+1)+'"'+(((c.weeklyDay||1)===i+1)?' selected':'')+'>'+n+'</option>').join("")+'</select><span class="muted" style="font-size:12px">в 9:00 по Москве</span></div>'+
+    '</div>'+
+    (ONLINE.mailMsg ? '<div class="adm-warn" style="margin:0 0 10px;'+(ONLINE.mailMsg.ok?'':'background:#FBECEC;border-color:#E3A9AA')+'">'+esc(ONLINE.mailMsg.text)+'</div>' : '')+'<div class="adm-actions"><button class="btn btn-primary" onclick="mailSave()">Сохранить</button></div>'+
+    '<details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600;font-size:13px">Проверка отправки</summary><div class="adm-actions" style="margin-top:8px"><input class="fld fld-sm" id="mc_test" type="email" placeholder="e-mail для проверки"> <button class="btn" onclick="mailTest()">Отправить тест</button> <button class="btn" onclick="mailReportNow(\'weekly\')">Недельный отчёт сейчас</button> <button class="btn" onclick="mailReportNow(\'close\')">Отчёт последнего месяца</button> <button class="btn" onclick="mailReportNow(\'plans\')">Отчёт по планам</button></div></details>'+
     ((ONLINE.mailLog||[]).length ? '<table style="margin-top:12px"><thead><tr><th>Когда</th><th>Кому</th><th>Тема</th><th>Результат</th></tr></thead><tbody>'+ONLINE.mailLog.slice(0,8).map(m=>'<tr><td>'+fmtTime(m.t)+'</td><td>'+esc(m.to)+'</td><td>'+esc(m.s)+'</td><td>'+(m.ok?'отправлено':'<span style="color:var(--danger)">'+esc(m.err||"ошибка")+'</span>')+'</td></tr>').join("")+'</tbody></table>' : '');
   const brows = (ONLINE.backups||[]).slice(0,20).map(b=>'<tr><td>'+fmtTime(b.t)+'</td><td class="mono">'+esc(b.name)+'</td><td>'+fmtSize(b.size)+'</td><td><a class="btn" href="/api/backups/'+encodeURIComponent(b.name)+'" download>Скачать</a> <button class="btn btn-danger" onclick="backupRestore(\''+b.name+'\')">Восстановить</button></td></tr>').join("")
     || '<tr><td colspan="4" class="muted">Копий пока нет, первая появится в течение 10 минут.</td></tr>';
   return reportsAdminHtml()+periodPanelHtml()+'<div class="panel"><p class="panel-title">Почта и уведомления</p>'+expl('сюда вводится почтовый ящик, с которого сервер отправляет письма. Ящик для робота лучше завести отдельный.','Узнайте у айтишников адрес SMTP-сервера и пароль приложения. Примеры: Яндекс smtp.yandex.ru, порт 465, SSL; Mail.ru smtp.mail.ru, порт 465, SSL. Пароль хранится на сервере и обратно в браузер не передаётся.')+mailForm+'</div>'+
-    '<div class="panel"><p class="panel-title">Адреса сотрудников для писем</p>'+expl('куда отправлять уведомления конкретному человеку.','У кого адрес не указан, письма не получает. Администратору нужен адрес, чтобы приходили сообщения «отдел готов».')+
-    '<div style="overflow-x:auto"><table><thead><tr><th>Имя</th><th>Департамент</th><th>E-mail</th><th></th></tr></thead><tbody>'+erows+'</tbody></table></div></div>'+
+    '<div class="panel"><p class="panel-title">Кому какие письма</p>'+expl('адрес каждого сотрудника и галочки: какие письма он получает.','Стандартные настройки зависят от роли, но вы можете включить или выключить любое письмо любому человеку. Недельный отчёт по умолчанию получают администраторы и отмеченные «Руководитель направления».')+subsTable+'</div>'+
     '<div class="panel"><p class="panel-title">Автоматические копии на сервере</p>'+expl('сервер сам сохраняет копию всех данных раз в сутки и хранит 30 последних.','«Восстановить» возвращает данные на момент копии. Пароли пользователей при этом не меняются. Перед восстановлением сервер сам делает ещё одну копию, поэтому ошибку можно отыграть назад.')+
     '<div class="adm-actions" style="margin-bottom:10px"><button class="btn btn-primary" onclick="backupNow()">Создать копию сейчас</button></div>'+
     '<div style="overflow-x:auto"><table><thead><tr><th>Когда</th><th>Файл</th><th>Размер</th><th></th></tr></thead><tbody>'+brows+'</tbody></table></div></div>';
@@ -3994,7 +4041,7 @@ function groupedLogHtml(){
     (groups.length > shown.length ? '<div style="margin-top:8px"><button class="btn" onclick="ONLINE.logLimit+=25;render()">Показать ещё ('+(groups.length-shown.length)+')</button></div>' : '')+'</div>';
 }
 async function loadHistory(){ try { const r = await api("GET","/api/history"); ONLINE.hist = r.rows||[]; if (state.tab==="admin") scheduleRender(); } catch(e){} }
-const CELL_FIELDS = { resource20:"Ресурс 20'", resource40:"Ресурс 40'", norm20:"Норма 20'", norm40:"Норма 40'", acc:"% сдачи", rep:"% ремонта", days:"Срок ремонта, дн", imp20:"Подход импорта, план 20'", imp40:"Подход импорта, план 40'", impF20:"Подход импорта, факт 20'", impF40:"Подход импорта, факт 40'",
+const CELL_FIELDS = { resource20:"Ресурс 20'", resource40:"Ресурс 40'", norm20:"Норма 20'", norm40:"Норма 40'", acc:"% сдачи", rep:"% ремонта", days:"Срок ремонта, дн", imp20:"Подход импорта, план 20'", imp40:"Подход импорта, план 40'", impF20:"Подход импорта, факт 20'", impF40:"Подход импорта, факт 40'", stockNow20:"Актуальный сток 20'", stockNow40:"Актуальный сток 40'", impFw0_20:"Факт подхода, неделя 1, 20'", impFw0_40:"Факт подхода, неделя 1, 40'", impFw1_20:"Факт подхода, неделя 2, 20'", impFw1_40:"Факт подхода, неделя 2, 40'", impFw2_20:"Факт подхода, неделя 3, 20'", impFw2_40:"Факт подхода, неделя 3, 40'", impFw3_20:"Факт подхода, неделя 4, 20'", impFw3_40:"Факт подхода, неделя 4, 40'", impFw4_20:"Факт подхода, неделя 5, 20'", impFw4_40:"Факт подхода, неделя 5, 40'",
   plan:"план", fact:"факт", teuPerTrain:"ТЕУ в поезде", limited:"лимитирующее", share20:"доля 20'", share40:"доля 40'", c20:"20'", c40:"40'" };
 function locName(id){ const l = LOCATIONS.find(x=>x.id===id); return l ? l.name : id; }
 function docLabel(doc){
@@ -4329,6 +4376,16 @@ function closeMeeting(){ const o = document.getElementById("meetingOv"); if (o) 
 function meetingFull(){ const o = document.getElementById("meetingOv"); try { if (o && o.requestFullscreen) o.requestFullscreen(); } catch(e){} }
 function meetingPrint(){ const f = document.getElementById("meetingFrame"); try { f.contentWindow.focus(); f.contentWindow.print(); } catch(e){ mainToast("Печать недоступна в этом браузере"); } }
 document.addEventListener("keydown", ev=>{ if (ev.key==="Escape") closeMeeting(); });
+
+async function subSet(id, k, v){
+  try { await api("PUT","/api/users/"+id,{ subs:{ [k]: !!v } }); if (ONLINE.users[id]) { ONLINE.users[id].subs = ONLINE.users[id].subs||{}; ONLINE.users[id].subs[k] = !!v; } mainToast("Сохранено"); }
+  catch(e){ mainToast((e&&e.message)||"Не получилось сохранить"); render(); }
+}
+async function subsResetAll(){
+  if (!confirm("Вернуть всем стандартные настройки писем (по роли)?")) return;
+  try { for (const id of Object.keys(ONLINE.users)) await api("PUT","/api/users/"+id,{ subsReset:true }); mainToast("Настройки сброшены"); }
+  catch(e){ mainToast((e&&e.message)||"Не получилось"); }
+}
 
 render();
 </script></body></html>

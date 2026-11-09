@@ -105,7 +105,12 @@ function deadlineLocked(kind) {
 function fmtDate(d) { const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? m[3] + "." + m[2] + "." + m[1] : d; }
 function writeDenied(me, id) {
   if (!canWriteDoc(me, id)) return "Нет прав на изменение этой части данных";
-  if (me.dept !== "admin") { const ak = AREA_KIND[areaOfDoc(id)]; if (ak && deadlineLocked(ak.kind)) return "Срок внесения истёк (" + fmtDate(ext.deadlines[ak.kind]) + "). Обратитесь к администратору"; }
+  if (me.dept !== "admin") {
+    const ak = AREA_KIND[areaOfDoc(id)];
+    // отдел без права на весь раздел «Импорт» (Эксплуатация вносит только факт) подчиняется сроку «факт», а не сроку отдела «Импорт»
+    const kind = ak ? ((areaOfDoc(id) === "import" && !permsFor(me.dept).includes("import")) ? "fact" : ak.kind) : null;
+    if (kind && deadlineLocked(kind)) return "Срок внесения истёк (" + fmtDate(ext.deadlines[kind]) + "). Обратитесь к администратору";
+  }
   return null;
 }
 function saveExt() { writeJson(EXT_F, ext); broadcast("ext", {}); }

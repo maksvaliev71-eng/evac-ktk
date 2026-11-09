@@ -17,7 +17,8 @@ const DEFAULT_PERMS = {
   expl: ["fact_expl", "import_fact", "stock"],
 };
 // частичные права: что можно менять внутри общего документа
-const PARTIAL = { import: { need: "import_fact", fields: ["impF20", "impF40"] }, inputs: { need: "stock", fields: ["resource20", "resource40"] } };
+const IMPFW = []; for (let i = 0; i < 5; i++) { IMPFW.push("impFw" + i + "_20", "impFw" + i + "_40"); }
+const PARTIAL = { import: { need: "import_fact", fields: ["impF20", "impF40"].concat(IMPFW) }, inputs: { need: "stock", fields: ["resource20", "resource40", "stockNow20", "stockNow40", "stockNowTs"] } };
 const DEPT_KEYS = ["vnutriros", "export", "import", "rail", "expl"];
 const ALL_DEPTS = DEPT_KEYS.concat(["viewer", "manager", "admin"]);
 
@@ -35,7 +36,7 @@ let logs = readJson(LOG_F, []);
 const EXT_F = path.join(DATA_DIR, "ext.json"), MAIL_F = path.join(DATA_DIR, "mail.json"), BK_DIR = path.join(DATA_DIR, "backups");
 let ext = readJson(EXT_F, {});          // статусы готовности, сроки, комментарии
 ext.status = ext.status || {}; ext.deadlines = ext.deadlines || {}; ext.comments = ext.comments || []; ext.reminded = ext.reminded || {};
-const MAIL_DEF = { evPlans: true, enabled: false, mode: "ssl", host: "", port: 465, user: "", pass: "", from: "", siteUrl: "", evReady: true, evAll: true, evClosed: true, evRemind: true, evWeekly: true, evCloseRpt: true };
+const MAIL_DEF = { evPlans: true, enabled: false, mode: "ssl", host: "", port: 465, user: "", pass: "", from: "", siteUrl: "", evReady: true, evAll: true, evClosed: true, evRemind: true, evWeekly: true, evCloseRpt: true, weeklyDay: 1 };
 let mailCfg = Object.assign({}, MAIL_DEF, readJson(MAIL_F, {}));
 const HIST_F = path.join(DATA_DIR, "history.jsonl");
 let history = [];   // последние правки по ячейкам: {t,u,n,d,doc,p,f,v}
@@ -232,9 +233,21 @@ function sendMail(rcpts, subject, text, html) {
   return mailChain;
 }
 function emailsOf(pred) { return Object.values(users).filter(u => u.email && pred(u)).map(u => u.email); }
-const mailAdmins = (subj, text) => sendMail(emailsOf(u => u.dept === "admin"), subj, text);
-const mailAll = (subj, text) => sendMail(emailsOf(() => true), subj, text);
-const mailDept = (dept, subj, text) => sendMail(emailsOf(u => u.dept === dept), subj, text);
+// подписки на письма: у каждого человека своя настройка, пустое значение — по роли
+const SUB_KEYS = ["ready", "all", "closed", "remind", "weekly", "closeRpt", "plans"];
+function defSub(u, k) {
+  switch (k) {
+    case "ready": case "all": return u.dept === "admin";
+    case "closed": case "plans": return true;
+    case "remind": return u.dept !== "manager" && u.dept !== "viewer";
+    case "weekly": return u.dept === "admin" || !!u.head;
+    case "closeRpt": return u.dept === "admin" || u.dept === "manager" || u.dept === "viewer";
+  }
+  return false;
+}
+const subOn = (u, k) => (u.subs && u.subs[k] !== undefined ? !!u.subs[k] : defSub(u, k));
+const rcptsFor = (k, pred) => emailsOf(u => subOn(u, k) && (!pred || pred(u)));
+const mailTo = (k, subj, text) => sendMail(rcptsFor(k), subj, text);
 
 // ---------- отчёты по почте ----------
 function escH(v) { return String(v == null ? "" : v).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -302,14 +315,14 @@ function plansReport() {
   const html = '<p style="margin:0 0 8px;color:#556">Все департаменты нажали «Готово» по планам. Итоговый план по локациям, шт.</p>' + tbl(head, rows);
   return { subject: "Планы подтверждены — " + sn.label, text: txt, html: wrapHtml("Планы всех департаментов: " + sn.label, html) };
 }
-const reportRcpts = () => emailsOf(u => u.dept === "admin" || u.dept === "manager" || u.dept === "viewer");
-const weeklyRcpts = () => emailsOf(u => u.dept === "admin" || u.head);
-const plansRcpts = () => emailsOf(() => true);
+const reportRcpts = () => rcptsFor("closeRpt");
+const weeklyRcpts = () => rcptsFor("weekly");
+const plansRcpts = () => rcptsFor("plans");
 function sendReport(r, rcpts) { if (r) return sendMail(rcpts || reportRcpts(), r.subject, r.text, r.html); return Promise.resolve(); }
 function weeklyCheck() {
   if (!mailCfg.enabled || !mailCfg.evWeekly) return;
   const msk = new Date(Date.now() + 3 * 3600000), today = mskToday();
-  if (msk.getUTCDay() !== 1 || msk.getUTCHours() < 9 || ext.lastWeekly === today) return;
+  if ((msk.getUTCDay() || 7) !== (parseInt(mailCfg.weeklyDay, 10) || 1) || msk.getUTCHours() < 9 || ext.lastWeekly === today) return;
   const r = weeklyReport(); if (!r) return;
   ext.lastWeekly = today; writeJson(EXT_F, ext); sendReport(r, weeklyRcpts());
 }
@@ -349,7 +362,7 @@ function remindersCheck() {
     const st = ext.status[dept] && ext.status[dept][kind]; if (st && st.ready && !st.dirty) continue;
     const key = dept + "|" + kind + "|" + d + "|" + today; if (ext.reminded[key]) continue;
     ext.reminded[key] = 1; dirty = true;
-    (dept === "expl" && kind === "plan" ? mailAdmins : (s2, t2) => mailDept(dept, s2, t2))("Напоминание: срок — " + KIND_LABEL[kind], "Срок внесения («" + KIND_LABEL[kind] + "») — " + fmtDate(d) + (d === today ? " (сегодня)" : " (завтра)") + ". Данные ещё не подтверждены кнопкой «Готово».");
+    ((s2, t2) => sendMail(rcptsFor("remind", u => u.dept === dept || (dept === "expl" && kind === "plan" && u.dept === "admin")), s2, t2))("Напоминание: срок — " + KIND_LABEL[kind], "Срок внесения («" + KIND_LABEL[kind] + "») — " + fmtDate(d) + (d === today ? " (сегодня)" : " (завтра)") + ". Данные ещё не подтверждены кнопкой «Готово».");
   }
   Object.keys(ext.reminded).forEach(k => { if (k.split("|")[3] < today) delete ext.reminded[k]; });
   if (dirty) writeJson(EXT_F, ext);
@@ -381,7 +394,7 @@ function readBody(req, limit) {
   });
 }
 function publicUsers(withEmail) {
-  const o = {}; for (const id of Object.keys(users)) { o[id] = { login: users[id].login, name: users[id].name, dept: users[id].dept }; if (withEmail) { o[id].email = users[id].email || ""; o[id].head = !!users[id].head; } } return o;
+  const o = {}; for (const id of Object.keys(users)) { o[id] = { login: users[id].login, name: users[id].name, dept: users[id].dept }; if (withEmail) { o[id].email = users[id].email || ""; o[id].head = !!users[id].head; o[id].subs = {}; SUB_KEYS.forEach(k => { o[id].subs[k] = subOn(users[id], k); }); } } return o;
 }
 function cookieHeader(req, token, maxAge) {
   const secure = (req.headers["x-forwarded-proto"] === "https") ? "; Secure" : "";
@@ -456,8 +469,8 @@ const server = http.createServer(async (req, res) => {
           ext.plansReported = true;
           if (mailCfg.enabled && mailCfg.evPlans) setTimeout(() => { try { sendReport(plansReport(), plansRcpts()); } catch (e) { console.error("plansReport:", e.message); } }, 10000);
         }
-        if (mailCfg.evReady) mailAdmins("Готово: " + DEPT_LABEL[dept] + " — " + KIND_LABEL[kind], DEPT_LABEL[dept] + ": " + KIND_LABEL[kind] + " подтверждён (" + me.name + ").");
-        if (mailCfg.evAll && allReady()) mailAdmins("Все департаменты подтвердили данные", "Все департаменты подтвердили план, факт и остальные данные. Месяц можно закрывать.");
+        if (mailCfg.evReady) mailTo("ready", "Готово: " + DEPT_LABEL[dept] + " — " + KIND_LABEL[kind], DEPT_LABEL[dept] + ": " + KIND_LABEL[kind] + " подтверждён (" + me.name + ").");
+        if (mailCfg.evAll && allReady()) mailTo("all", "Все департаменты подтвердили данные", "Все департаменты подтвердили план, факт и остальные данные. Месяц можно закрывать.");
       } else {
         delete ext.status[dept][kind]; if (kind === "plan") ext.plansReported = false;
         addLogText(me, "Снял(а) подтверждение: " + KIND_LABEL[kind]);
@@ -526,7 +539,7 @@ const server = http.createServer(async (req, res) => {
         if (id === "meta" && oldCursor !== undefined && b.monthCursor !== oldCursor) {
           ext.status = {}; ext.deadlines = {}; ext.reminded = {}; ext.plansReported = false; saveExt();
           if (mailCfg.enabled && mailCfg.evCloseRpt) setTimeout(() => { try { sendReport(closeReport()); } catch (e) { console.error("closeReport:", e.message); } }, 20000);
-          if (mailCfg.evClosed) mailAll("Месяц закрыт", "Администратор закрыл месяц и открыл новый. Данные для заполнения обнулены. Сроки нужно задать заново.");
+          if (mailCfg.evClosed) mailTo("closed", "Месяц закрыт", "Администратор закрыл месяц и открыл новый. Данные для заполнения обнулены. Сроки нужно задать заново.");
         }
         return send(res, 200, { ok: true });
       }
@@ -589,6 +602,8 @@ const server = http.createServer(async (req, res) => {
           if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return send(res, 400, { error: "Неверный e-mail" });
           if (em) u.email = em; else delete u.email;
         }
+        if (b.subsReset) delete u.subs;
+        if (b.subs && typeof b.subs === "object") { u.subs = u.subs || {}; SUB_KEYS.forEach(k => { if (b.subs[k] !== undefined) u.subs[k] = !!b.subs[k]; }); }
         if (b.head !== undefined) { if (b.head) u.head = true; else delete u.head; }
         if (b.password !== undefined) {
           if (String(b.password).length < 6) return send(res, 400, { error: "Пароль короче 6 знаков" });
@@ -618,6 +633,7 @@ const server = http.createServer(async (req, res) => {
       if (b.pass) n.pass = String(b.pass).slice(0, 200);
       if (b.port !== undefined) n.port = parseInt(b.port, 10) || 0;
       if (["ssl", "starttls", "plain"].includes(b.mode)) n.mode = b.mode;
+      if (b.weeklyDay !== undefined) { const d = parseInt(b.weeklyDay, 10); if (d >= 1 && d <= 7) n.weeklyDay = d; }
       for (const k of ["enabled", "evReady", "evAll", "evClosed", "evRemind", "evWeekly", "evCloseRpt", "evPlans"]) if (b[k] !== undefined) n[k] = !!b[k];
       mailCfg = n; writeJson(MAIL_F, mailCfg); return send(res, 200, { ok: true });
     }

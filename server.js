@@ -13,7 +13,7 @@ const DEFAULT_PERMS = {
   vnutriros: ["plan_vnutriros", "fact_vnutriros"],
   export: ["plan_export", "fact_export"],
   import: ["import"],
-  rail: ["routes"],
+  rail: ["routes", "trainsCfg"],
   expl: ["fact_expl", "import_fact", "stock"],
 };
 // частичные права: что можно менять внутри общего документа
@@ -339,7 +339,7 @@ function weeklyCheck() {
 // ---------- хранение контейнеров на терминалах (только админ и Эксплуатация) ----------
 const ST_DIR = path.join(DATA_DIR, "storage"); fs.mkdirSync(ST_DIR, { recursive: true });
 const ST_CFG_F = path.join(ST_DIR, "config.json"), ST_IDX_F = path.join(ST_DIR, "index.json");
-let stCfg = readJson(ST_CFG_F, { terminals: [] }); if (!Array.isArray(stCfg.terminals)) stCfg.terminals = [];
+const ST_BASE = "2000-01"; // «с начала»: первая версия тарифа действует и на более ранние месяцы
 let stIdx = readJson(ST_IDX_F, {});
 const stOk = me => !!me && (me.dept === "admin" || me.dept === "expl");
 const stYmOk = s => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(s || ""));
@@ -347,46 +347,83 @@ const stMF = ym => path.join(ST_DIR, "m-" + ym + ".json");
 function stWrite(f, obj) { try { if (fs.existsSync(f)) fs.copyFileSync(f, f + ".bak"); } catch (e) {} writeJson(f, obj); }
 function stNum(v, max) { const n = Number(String(v === undefined || v === null ? "" : v).replace(",", ".").replace(/\s/g, "")); return isFinite(n) && n >= 0 ? Math.min(Math.round(n * 100) / 100, max || 1e9) : 0; }
 function stTariff(t) { t = t || {}; return { prr: stNum(t.prr), rate: stNum(t.rate), free: Math.round(stNum(t.free, 3650)) }; }
+// версии тарифов терминала: [{from:"YYYY-MM", t20, t40}], по возрастанию from; первая действует и на более ранние месяцы
+function stVersions(vs) {
+  const m = new Map();
+  for (const v of vs || []) { const f = String((v && v.from) || ""); if (stYmOk(f)) m.set(f, { from: f, t20: stTariff(v.t20), t40: stTariff(v.t40) }); }
+  const arr = [...m.values()].sort((a, b) => a.from.localeCompare(b.from));
+  return arr.length ? arr : [{ from: ST_BASE, t20: stTariff(), t40: stTariff() }];
+}
+function stCleanTerm(t, id) {
+  const vs = Array.isArray(t.tariffs) ? t.tariffs : ((t.t20 || t.t40) ? [{ from: ST_BASE, t20: t.t20, t40: t.t40 }] : []);
+  return { id, city: String(t.city || "").trim().slice(0, 60) || "Без города", name: String(t.name || "").trim().slice(0, 80), tariffs: stVersions(vs), archived: !!t.archived };
+}
+let stCfg = readJson(ST_CFG_F, { terminals: [] }); if (!Array.isArray(stCfg.terminals)) stCfg.terminals = [];
+stCfg.terminals = stCfg.terminals.map(t => stCleanTerm(t, t.id));
+// ставки терминала на месяц: последняя версия с from <= месяца, иначе первая
+function stRates(term, ym) { let r = term.tariffs[0]; for (const v of term.tariffs) if (v.from <= ym) r = v; return r; }
 function stDay(s) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || "")); if (!m) return null;
   const t = Date.UTC(+m[1], +m[2] - 1, +m[3]); if (new Date(t).getUTCMonth() !== +m[2] - 1) return null; return Math.round(t / 86400000);
 }
 function stMonthRange(ym) { const y = +ym.slice(0, 4), m = +ym.slice(5, 7); return [Math.round(Date.UTC(y, m - 1, 1) / 86400000), Math.round(Date.UTC(y, m, 0) / 86400000)]; }
+const stIso = d => new Date(d * 86400000).toISOString().slice(0, 10);
+function stPrevYm(ym) { const y = +ym.slice(0, 4), m = +ym.slice(5, 7); return m === 1 ? (y - 1) + "-12" : y + "-" + String(m - 1).padStart(2, "0"); }
 const stR2 = v => Math.round(v * 100) / 100;
-// расчёт месяца. Контейнер без выезда считается по «сегодня» (но не дальше конца месяца); после выезда сутки фиксируются.
-// Сутки заезда и выезда считаются оба. Бесплатные дни — один раз от даты заезда (в т.ч. заезд в прошлом месяце).
-function stCalc(mf, today) {
-  const [ms, me_] = stMonthRange(mf.month), td = stDay(today), asOf = Math.min(td === null ? me_ : td, me_);
-  const terms = mf.terms || {}, out = [], by = {}, tot = { cnt20: 0, cnt40: 0, days: 0, paid: 0, st: 0, ops: 0, prr: 0, tot: 0, open: 0, mism: 0 };
+// терминал для расчёта месяца: из актуального списка (ставки на месяц tm), а если его там уже нет — из снимка в файле месяца
+function stTermFor(mf, id, tm) {
+  const c = stCfg.terminals.find(t => t.id === id);
+  if (c) { const r = stRates(c, tm); return { name: c.name, city: c.city, from: r.from, t20: r.t20, t40: r.t40 }; }
+  const s = (mf.terms || {})[id]; return s ? { name: s.name, city: s.city, from: s.from || "", t20: s.t20, t40: s.t40 } : null;
+}
+// Расчёт месяца. Каждый месяц считается отдельно, только за свои сутки и свои операции — поэтому
+// контейнер, стоящий несколько месяцев, нигде не считается дважды.
+// • Сутки заезда и выезда считаются оба; без выезда — по «сегодня» (но не дальше конца месяца).
+// • Бесплатные дни — один раз от даты заезда (в т.ч. заезд в прошлом месяце).
+// • Крановые операции: 1 за заезд в этом месяце + 1 за выезд в этом месяце (0–2).
+function stCalc(mf, today, opts) {
+  const tm = (opts && opts.tmonth) || mf.month, [ms, me_] = stMonthRange(mf.month), td = stDay(today), asOf = Math.min(td === null ? me_ : td, me_);
+  const tc = {}, out = [], by = {}, terms = {}, tot = { cnt20: 0, cnt40: 0, days: 0, paid: 0, st: 0, ops: 0, prr: 0, tot: 0, open: 0 };
   for (const r of mf.rows || []) {
-    const tm = terms[r.t]; if (!tm) continue;
-    const tf = r.s === 40 ? tm.t40 : tm.t20, inD = stDay(r.i), outD = r.o ? stDay(r.o) : null; if (inD === null) continue;
+    const tmx = tc[r.t] !== undefined ? tc[r.t] : (tc[r.t] = stTermFor(mf, r.t, tm)); if (!tmx) continue;
+    terms[r.t] = tmx;
+    const tf = r.s === 40 ? tmx.t40 : tmx.t20, inD = stDay(r.i), outD = r.o ? stDay(r.o) : null; if (inD === null) continue;
     const start = Math.max(inD, ms), end = Math.min(outD !== null ? outD : asOf, me_), open = outD === null;
     const days = Math.max(0, end - start + 1), paid = Math.max(0, end - Math.max(start, inD + tf.free) + 1);
-    const st = stR2(paid * tf.rate), prr = stR2((r.n || 0) * tf.prr), row = { t: r.t, c: r.c, s: r.s, i: r.i, o: r.o || "", n: r.n || 0, days, free: tf.free, paid, st, prr, tot: stR2(st + prr), open };
-    if (r.d !== null && r.d !== undefined && r.d !== "" && Number(r.d) !== days) { row.dx = Number(r.d); tot.mism++; }
+    const ops = (inD >= ms && inD <= me_ ? 1 : 0) + (outD !== null && outD >= ms && outD <= me_ ? 1 : 0);
+    const st = stR2(paid * tf.rate), prr = stR2(ops * tf.prr), row = { t: r.t, c: r.c, s: r.s, i: r.i, o: r.o || "", n: ops, days, free: tf.free, paid, st, prr, tot: stR2(st + prr), open };
     out.push(row);
     const b = by[r.t] || (by[r.t] = { cnt20: 0, cnt40: 0, days: 0, paid: 0, st: 0, ops: 0, prr: 0, tot: 0, open: 0 });
-    for (const o of [b, tot]) { if (r.s === 40) o.cnt40++; else o.cnt20++; o.days += days; o.paid += paid; o.st += st; o.ops += r.n || 0; o.prr += prr; o.tot += row.tot; if (open) o.open++; }
+    for (const o of [b, tot]) { if (r.s === 40) o.cnt40++; else o.cnt20++; o.days += days; o.paid += paid; o.st += st; o.ops += ops; o.prr += prr; o.tot += row.tot; if (open) o.open++; }
   }
   for (const o of Object.values(by).concat([tot])) { o.st = stR2(o.st); o.prr = stR2(o.prr); o.tot = stR2(o.tot); }
-  return { rows: out, byTerm: by, tot, asOf: new Date(asOf * 86400000).toISOString().slice(0, 10) };
+  return { rows: out, byTerm: by, tot, terms, asOf: stIso(asOf) };
 }
-function stSnapTerms() { const o = {}; for (const t of stCfg.terminals) o[t.id] = { name: t.name, city: t.city, t20: stTariff(t.t20), t40: stTariff(t.t40) }; return o; }
-function stIndexEntry(mf, res) { return { rows: (mf.rows || []).length, uploadedAt: mf.uploadedAt, by: mf.by, asOf: res.asOf, sum: res.tot }; }
+function stSnapTerms(ym) { const o = {}; for (const t of stCfg.terminals) { const r = stRates(t, ym); o[t.id] = { name: t.name, city: t.city, from: r.from, t20: r.t20, t40: r.t40 }; } return o; }
+function stIndexEntry(mf, res) {
+  const tn = {}; for (const id of Object.keys(res.terms)) tn[id] = { n: res.terms[id].name, c: res.terms[id].city };
+  return { rows: (mf.rows || []).length, uploadedAt: mf.uploadedAt, by: mf.by, asOf: res.asOf, sum: res.tot, byTerm: res.byTerm, tn };
+}
 function stList() {
   const today = mskToday(), months = []; let changed = false;
   let files = []; try { files = fs.readdirSync(ST_DIR).filter(f => /^m-\d{4}-\d{2}\.json$/.test(f)); } catch (e) {}
   for (const f of files) {
-    const ym = f.slice(2, 9); const [, me_] = stMonthRange(ym), td = stDay(today), want = new Date(Math.min(td, me_) * 86400000).toISOString().slice(0, 10);
+    const ym = f.slice(2, 9); const [, me_] = stMonthRange(ym), td = stDay(today), want = stIso(Math.min(td, me_));
     let e = stIdx[ym];
-    if (!e || e.asOf !== want) { const mf = readJson(path.join(ST_DIR, f), null); if (!mf) continue; e = stIdx[ym] = stIndexEntry(mf, stCalc(mf, today)); changed = true; }
-    months.push({ month: ym, rows: e.rows, uploadedAt: e.uploadedAt, by: e.by, asOf: e.asOf, sum: e.sum });
+    if (!e || e.asOf !== want || !e.byTerm) { const mf = readJson(path.join(ST_DIR, f), null); if (!mf) continue; e = stIdx[ym] = stIndexEntry(mf, stCalc(mf, today)); changed = true; }
+    months.push({ month: ym, rows: e.rows, uploadedAt: e.uploadedAt, by: e.by, asOf: e.asOf, sum: e.sum, byTerm: e.byTerm, tn: e.tn });
   }
   if (changed) { try { writeJson(ST_IDX_F, stIdx); } catch (e) {} }
   return months.sort((a, b) => b.month.localeCompare(a.month));
 }
 function stNorm(s) { return String(s || "").trim().toLowerCase().replace(/\s+/g, " "); }
+// контроль между месяцами: контейнеры, стоявшие на терминале в конце прошлого месяца, но отсутствующие в файле этого месяца
+function stContinuity(ym, mf) {
+  const pym = stPrevYm(ym), pf = readJson(stMF(pym), null); if (!pf) return null;
+  const [, pe] = stMonthRange(pym), cur = new Set((mf.rows || []).map(r => r.t + "|" + r.c)), list = [];
+  for (const r of pf.rows || []) { const od = r.o ? stDay(r.o) : null; if ((od === null || od > pe) && !cur.has(r.t + "|" + r.c)) { const t = stTermFor(pf, r.t, pym); list.push({ t: t ? t.name : "?", c: r.c, s: r.s, i: r.i }); } }
+  return { prev: pym, count: list.length, list: list.slice(0, 100) };
+}
 
 // ---------- автоматические резервные копии ----------
 function backupList() {
@@ -554,15 +591,31 @@ const server = http.createServer(async (req, res) => {
     if (p.startsWith("/api/storage")) {
       if (!stOk(me)) return send(res, 403, { error: "Раздел доступен только администратору и Эксплуатации" });
       if (p === "/api/storage" && req.method === "GET") return send(res, 200, { cfg: stCfg, months: stList(), today: mskToday() });
+      if (p === "/api/storage/analytics" && req.method === "GET") {
+        const ms2 = stList().slice().reverse(), terms = {}, rates = {}, fx = {}, today = mskToday();
+        for (const m of ms2) for (const id of Object.keys(m.tn || {})) terms[id] = m.tn[id];
+        const out = ms2.map(m => {
+          const [, me2] = stMonthRange(m.month), mf = readJson(stMF(m.month), null); rates[m.month] = {}; fx[m.month] = {};
+          if (mf) {
+            const cur = stCalc(mf, today), pym = stPrevYm(m.month), prev = stCalc(mf, today, { tmonth: pym });
+            for (const id of Object.keys(cur.terms)) {
+              const t = cur.terms[id]; rates[m.month][id] = { from: t.from, t20: t.t20, t40: t.t40 };
+              const d = stR2(((cur.byTerm[id] || {}).tot || 0) - ((prev.byTerm[id] || {}).tot || 0)); if (d) fx[m.month][id] = d;
+            }
+          }
+          return { month: m.month, asOf: m.asOf, partial: stDay(m.asOf) < me2, byTerm: m.byTerm, tot: m.sum };
+        });
+        return send(res, 200, { months: out, terms, rates, fx });
+      }
       if (p === "/api/storage/cfg" && req.method === "PUT") {
         const b = await readBody(req, 2000000); if (!Array.isArray(b.terminals) || b.terminals.length > 300) return send(res, 400, { error: "Неверные данные" });
         const used = new Set(), list = [];
         for (const t of b.terminals) {
           const name = String(t.name || "").trim().slice(0, 80); if (!name) continue;
           let id = /^[0-9a-f]{8}$/.test(String(t.id || "")) && !used.has(t.id) ? t.id : ""; while (!id || used.has(id)) id = crypto.randomBytes(4).toString("hex");
-          used.add(id); list.push({ id, city: String(t.city || "").trim().slice(0, 60) || "Без города", name, t20: stTariff(t.t20), t40: stTariff(t.t40) });
+          used.add(id); list.push(stCleanTerm(Object.assign({}, t, { name }), id));
         }
-        stCfg = { terminals: list }; stWrite(ST_CFG_F, stCfg); addLogText(me, "Хранение: изменил(а) терминалы и тарифы"); broadcast("storage", {});
+        stCfg = { terminals: list }; stWrite(ST_CFG_F, stCfg); stIdx = {}; try { writeJson(ST_IDX_F, stIdx); } catch (e) {} addLogText(me, "Хранение: изменил(а) терминалы и тарифы"); broadcast("storage", {});
         return send(res, 200, { ok: true, cfg: stCfg });
       }
       let sm;
@@ -571,22 +624,16 @@ const server = http.createServer(async (req, res) => {
         if (!sm[2] && req.method === "GET") {
           const mf = readJson(f, null); if (!mf) return send(res, 404, { error: "Нет данных за этот месяц" });
           const result = stCalc(mf, mskToday()); stIdx[ym] = stIndexEntry(mf, result);
-          return send(res, 200, { month: ym, uploadedAt: mf.uploadedAt, by: mf.by, terms: mf.terms, result });
+          return send(res, 200, { month: ym, uploadedAt: mf.uploadedAt, by: mf.by, terms: result.terms, result, continuity: stContinuity(ym, mf) });
         }
         if (!sm[2] && req.method === "DELETE") {
           if (!fs.existsSync(f)) return send(res, 404, { error: "Нет данных" });
           try { fs.copyFileSync(f, f + ".deleted"); fs.unlinkSync(f); } catch (e) {} delete stIdx[ym]; try { writeJson(ST_IDX_F, stIdx); } catch (e) {}
           addLogText(me, "Хранение: удалил(а) данные за " + ym); broadcast("storage", {}); return send(res, 200, { ok: true });
         }
-        if (sm[2] && req.method === "POST") {
-          const mf = readJson(f, null); if (!mf) return send(res, 404, { error: "Нет данных" });
-          const snap = stSnapTerms(); for (const id of Object.keys(mf.terms || {})) if (snap[id]) mf.terms[id] = snap[id];
-          stWrite(f, mf); stIdx[ym] = stIndexEntry(mf, stCalc(mf, mskToday())); try { writeJson(ST_IDX_F, stIdx); } catch (e) {}
-          addLogText(me, "Хранение: пересчитал(а) " + ym + " по текущим тарифам"); broadcast("storage", {}); return send(res, 200, { ok: true });
-        }
         if (!sm[2] && req.method === "PUT") {
           const b = await readBody(req, 40000000); if (!Array.isArray(b.rows)) return send(res, 400, { error: "Нет строк" });
-          const [ms, me_] = stMonthRange(ym), errors = [], created = [], rows = []; let skipped = 0, outside = 0;
+          const [ms, me_] = stMonthRange(ym), errors = [], created = [], rows = [], seen = new Set(); let skipped = 0, outside = 0, dups = 0;
           const find = (name, city) => {
             const n = stNorm(name), c = stNorm(city); const same = stCfg.terminals.filter(t => stNorm(t.name) === n);
             if (same.length === 1) return same[0]; if (same.length > 1 && c) return same.find(t => stNorm(t.city) === c) || null; return same.length ? same[0] : null;
@@ -600,17 +647,19 @@ const server = http.createServer(async (req, res) => {
             let tm = find(name, r.city);
             if (!tm) {
               let id; do { id = crypto.randomBytes(4).toString("hex"); } while (stCfg.terminals.some(t => t.id === id));
-              tm = { id, city: String(r.city || "").trim().slice(0, 60) || "Без города", name: name.slice(0, 80), t20: stTariff(), t40: stTariff() }; stCfg.terminals.push(tm); created.push(tm.name);
+              tm = stCleanTerm({ city: r.city, name: name.slice(0, 80) }, id); stCfg.terminals.push(tm); created.push(tm.name);
             }
-            rows.push({ t: tm.id, c: ctn, s: size, i: String(r.inD), o: outD !== null ? String(r.outD) : "", n: Math.max(0, Math.min(100000, Math.round(Number(r.ops) || 0))), d: (r.days === "" || r.days === null || r.days === undefined || !isFinite(Number(r.days))) ? null : Number(r.days) });
+            const dk = tm.id + "|" + ctn + "|" + size + "|" + r.inD + "|" + (outD !== null ? r.outD : "");
+            if (seen.has(dk)) { dups++; continue; } seen.add(dk);
+            rows.push({ t: tm.id, c: ctn, s: size, i: String(r.inD), o: outD !== null ? String(r.outD) : "" });
           }
           if (!rows.length) return send(res, 400, { error: "Ни одной подходящей строки", errors, outside });
           if (created.length) { stWrite(ST_CFG_F, stCfg); }
-          const mf = { month: ym, uploadedAt: Date.now(), by: me.name, terms: stSnapTerms(), rows }, result = stCalc(mf, mskToday());
+          const mf = { month: ym, uploadedAt: Date.now(), by: me.name, terms: stSnapTerms(ym), rows }, result = stCalc(mf, mskToday());
           stWrite(f, mf); stIdx[ym] = stIndexEntry(mf, result); try { writeJson(ST_IDX_F, stIdx); } catch (e) {}
-          const noTariff = Object.keys(result.byTerm).filter(id => { const t = mf.terms[id]; return t && !t.t20.rate && !t.t40.rate && !t.t20.prr && !t.t40.prr; }).map(id => mf.terms[id].name);
+          const noTariff = Object.keys(result.byTerm).filter(id => { const t = result.terms[id]; return t && !t.t20.rate && !t.t40.rate && !t.t20.prr && !t.t40.prr; }).map(id => result.terms[id].name);
           addLogText(me, "Хранение: загрузил(а) данные за " + ym + " (" + rows.length + " строк)"); broadcast("storage", {});
-          return send(res, 200, { ok: true, accepted: rows.length, skipped, outside, errors, created, noTariff });
+          return send(res, 200, { ok: true, accepted: rows.length, skipped, outside, dups, errors, created, noTariff });
         }
       }
       return send(res, 404, { error: "Не найдено" });

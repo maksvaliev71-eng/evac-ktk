@@ -2858,6 +2858,7 @@ function render(){
     { key: "drops", label: "Дроп-офф" },
   ];
   if (typeof ONLINE!=="undefined" && ONLINE.me && typeof nextTabVisible==="function" && nextTabVisible()) tabsDef.push({ key: "next", label: "Следующий месяц" });
+  if (typeof ONLINE!=="undefined" && ONLINE.me && typeof storageTabVisible==="function" && storageTabVisible()) tabsDef.push({ key: "storage", label: "Хранение" });
   if (typeof ONLINE!=="undefined" && ONLINE.isAdmin) tabsDef.push({ key: "admin", label: "Админ" }); else if (typeof ONLINE!=="undefined" && ONLINE.me && ONLINE.me.dept==="manager") tabsDef.push({ key: "admin", label: "Комментарии" });
   document.getElementById("tabs").innerHTML = tabsDef.map(t=>
     '<div class="tab '+(state.tab===t.key?"active":"")+'" onclick="setTab(\''+t.key+'\')">'+t.label+'</div>'
@@ -2873,6 +2874,7 @@ function render(){
   else if (state.tab==="forecast") html = renderForecastTab();
   else if (state.tab==="archive") html = renderArchiveTab();
   else if (state.tab==="next") html = (typeof renderNextTab==="function") ? renderNextTab() : "";
+  else if (state.tab==="storage") html = (typeof renderStorageTab==="function") ? renderStorageTab() : "";
   else if (state.tab==="admin") html = (typeof renderAdminTab==="function") ? renderAdminTab() : "";
   else if (state.tab==="drops") html = '<iframe id="dropsFrame" title="Ставки дроп-офф" style="width:100%;border:0;display:block;height:640px;background:transparent"></iframe>';
   document.getElementById("content").innerHTML = html;
@@ -3034,10 +3036,14 @@ function canWriteArea(a){
     else if (a==="import_plan") ok = P.includes("import");
     else if (a==="import_factw") ok = P.includes("import_fact");
     else if (a==="stock_now") ok = P.includes("stock");
+    else if (a==="routes_plan" || a==="routes_fact") ok = P.includes("routes");
     else ok = P.includes(a);
     if (!ok) return false; }
   try {
     let kind = AREA_TO_KIND[a];
+    // поезда: ТЕУ/план/доли подчиняются сроку «ЖД», факт поездов — сроку «факт»; документ целиком закрыт, только если закрыты оба
+    if (a==="routes_plan") kind = "rail"; else if (a==="routes_fact") kind = "fact";
+    else if (a==="routes") { if (ONLINE.server && deadlineLockedClient("rail") && deadlineLockedClient("fact")) return false; kind = null; }
     if ((a==="import" || a==="import_fact" || a==="import_factw") && !permsFor(ONLINE.me.dept).includes("import")) kind = "fact";
     if (ONLINE.server && kind && deadlineLockedClient(kind)) return false;
   } catch(e){}
@@ -3323,13 +3329,14 @@ function areaOfKey(k){
   if ((m = k.match(/^fact(?:20|40)-[a-z]+-(\w+)$/))) return "fact_"+m[1];
   if ((m = k.match(/^fw-[a-z]+-(\w+)-\d-c\d\d$/))) return "fact_"+m[1];
   if (/^dshare-/.test(k)) return "shares";
-  if (/^(rplan|rfact|rteu|rs20|rs40)-/.test(k)) return "routes";
+  if (/^rfact-/.test(k)) return "routes_fact";
+  if (/^(rplan|rteu|rs20|rs40)-/.test(k)) return "routes_plan";
   if (/^(horizon|teuov)-/.test(k)) return "trainsCfg";
   if (/^fin-/.test(k)) return "forecast";
   if (/^aedit/.test(k)) return "archive";
   return null;
 }
-const BTN_AREAS = { toggleRouteLimit:"routes", toggleCapacityDept:"trainsCfg", applyComputedNorm:"inputs_other", applyStockNow:"stock_now", closeMonth:"meta", toggleArchiveEdit:"archive" };
+const BTN_AREAS = { toggleRouteLimit:"routes_plan", toggleCapacityDept:"trainsCfg", applyComputedNorm:"inputs_other", applyStockNow:"stock_now", closeMonth:"meta", toggleArchiveEdit:"archive" };
 function applyPerms(){
   if (!ONLINE.me) return;
   document.querySelectorAll("#content input[data-key]").forEach(el=>{
@@ -3460,7 +3467,7 @@ async function api(method, url, body){
   const r = await fetch(url, { method, headers: body ? {"Content-Type":"application/json"} : {}, body: body ? JSON.stringify(body) : undefined, credentials:"same-origin" });
   let j = {}; try { j = await r.json(); } catch(e){}
   if (r.status === 401 && ONLINE.me) { logoutUser("Сессия закончилась. Войдите заново."); }
-  if (!r.ok) throw new Error(j.error || ("Ошибка "+r.status));
+  if (!r.ok) { const er = new Error(j.error || ("Ошибка "+r.status)); er.data = j; throw er; }
   return j;
 }
 const srvCache = { app:{}, users:{}, perms:null };
@@ -3494,6 +3501,7 @@ async function serverStart(){
     es.addEventListener("log", ()=>{ if (ONLINE.me) refreshServerLog(); if (ONLINE.isAdmin && state.tab==="admin" && typeof loadHistory==="function") loadHistory(); });
     es.addEventListener("ext", ()=>{ if (typeof loadExt==="function" && ONLINE.me) loadExt(); });
     es.addEventListener("reload", ()=>{ location.reload(); });
+    es.addEventListener("storage", ()=>{ if (typeof stgOnEvent==="function") stgOnEvent(); });
     es.addEventListener("presence", ev=>{ try { ONLINE.presence = JSON.parse(ev.data)||[]; if (typeof applyPresence==="function") applyPresence(); } catch(e){} });
     es.onerror = ()=>{ /* браузер переподключится сам */ };
     es.onopen = async ()=>{ if (ONLINE.me) { try { const a2 = await api("GET","/api/app"); srvCache.app = a2.docs||{}; deliverApp(); } catch(e){} } };
@@ -4389,6 +4397,316 @@ async function subsResetAll(){
   if (!confirm("Вернуть всем стандартные настройки писем (по роли)?")) return;
   try { for (const id of Object.keys(ONLINE.users)) await api("PUT","/api/users/"+id,{ subsReset:true }); mainToast("Настройки сброшены"); }
   catch(e){ mainToast((e&&e.message)||"Не получилось"); }
+}
+
+// ===== Хранение контейнеров на терминалах (только админ и Эксплуатация) =====
+const STG = { loaded:false, loading:false, err:"", cfg:{terminals:[]}, months:[], today:"", ym:"", res:null, terms:{}, meta:null, noData:false,
+  open:{}, f:{term:"",q:"",paid:false,openOnly:false}, lim:300, calc:{tid:"",size:"20",qty:1,days:10,ops:2}, upl:null, upRes:null, busy:false };
+function storageTabVisible(){ return !!ONLINE.me && (ONLINE.isAdmin || ONLINE.me.dept==="expl"); }
+const stgMoney = v => (Number(v)||0).toLocaleString("ru-RU",{minimumFractionDigits:0,maximumFractionDigits:2})+" ₽";
+const stgInt = v => Math.round(Number(v)||0).toLocaleString("ru-RU");
+const stgDate = iso => iso ? iso.slice(8,10)+"."+iso.slice(5,7)+"."+iso.slice(0,4) : "";
+const stgMonthLabel = ym => MONTH_NAMES[+ym.slice(5,7)-1]+" "+ym.slice(0,4);
+const stgWhen = ms => ms ? new Date(ms).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}) : "";
+const stgN = v => { const n = Number(String(v==null?"":v).replace(",",".").replace(/\s/g,"")); return isFinite(n)&&n>0 ? Math.round(n*100)/100 : 0; };
+function stgRerender(){ if (state.tab==="storage" && typeof render==="function") render(); }
+function stgTyping(){ const a = document.activeElement; return !!a && (a.tagName==="INPUT"||a.tagName==="SELECT"||a.tagName==="TEXTAREA"); }
+(function(){ if (document.getElementById("stgCss")) return; document.head.insertAdjacentHTML("beforeend", '<style id="stgCss">'+
+  '.sx-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:0 0 14px}'+
+  '.sx-card{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:#fff}'+
+  '.sx-card b{display:block;font-size:18px;margin-top:2px}.sx-card span{font-size:11.5px;color:var(--muted)}'+
+  '.sx-city td{background:#F2F6FA;font-weight:700;cursor:pointer}.sx-term td{font-size:13px}.sx-term td:first-child{padding-left:28px}'+
+  '.sx-in{width:84px;padding:5px 7px;border:1.5px solid var(--border-strong);border-radius:7px;font:inherit;font-size:13px;text-align:right;background:#fff;color:var(--ink)}'+
+  '.sx-name{width:100%;min-width:150px;padding:5px 7px;border:1.5px solid var(--border-strong);border-radius:7px;font:inherit;font-size:13px;background:#fff;color:var(--ink)}'+
+  '.sx-x{border:0;background:none;color:var(--danger);cursor:pointer;font-size:16px}.sx-row{cursor:pointer}.sx-row:hover td{background:#F7FAFC}'+
+  '.sx-act{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}.sx-ok{color:var(--ok);font-weight:700}.sx-bad{color:var(--danger);font-weight:700}'+
+  '</style>'); })();
+
+// ---------- загрузка ----------
+async function stgLoad(){
+  if (STG.loading) return; STG.loading = true;
+  try { const r = await api("GET","/api/storage"); STG.cfg = r.cfg||{terminals:[]}; STG.months = r.months||[]; STG.today = r.today; if (!STG.ym) STG.ym = r.today.slice(0,7); STG.err = ""; STG.loaded = true; await stgLoadMonth(true); }
+  catch(e){ STG.err = e.message||"Ошибка"; STG.loaded = true; }
+  STG.loading = false; stgRerender();
+}
+async function stgLoadMonth(quiet){
+  try { const r = await api("GET","/api/storage/month/"+STG.ym); STG.res = r.result; STG.terms = r.terms||{}; STG.meta = { uploadedAt:r.uploadedAt, by:r.by }; STG.noData = false; }
+  catch(e){ STG.res = null; STG.terms = {}; STG.meta = null; STG.noData = true; }
+  if (!quiet) stgRerender();
+}
+async function stgReload(force){
+  try { const r = await api("GET","/api/storage"); STG.cfg = r.cfg; STG.months = r.months; STG.today = r.today; await stgLoadMonth(true); if (force || !stgTyping()) stgRerender(); } catch(e){}
+}
+function stgOnEvent(){ if (ONLINE.me && storageTabVisible() && STG.loaded && !STG.busy) stgReload(false); }
+function stgSetMonth(ym){ if (!/^\d{4}-\d{2}$/.test(ym||"")) return; STG.ym = ym; STG.res = null; STG.upl = null; STG.upRes = null; STG.f.term = ""; STG.f.q = ""; stgLoadMonth(false); }
+function stgToggle(k){ STG.open[k] = !STG.open[k]; stgRerender(); }
+function stgAll(on){ const res = STG.res; if (!res) return; Object.keys(res.byTerm).forEach(tid=>{ const t = STG.terms[tid]; if (t) STG.open["c:"+t.city] = on; }); stgRerender(); }
+
+// ---------- тарифы ----------
+async function stgCfgSave(){
+  STG.busy = true;
+  try { const r = await api("PUT","/api/storage/cfg",{ terminals: STG.cfg.terminals }); STG.cfg = r.cfg; mainToast("Тарифы сохранены"); }
+  catch(e){ mainToast(e.message||"Не получилось сохранить"); }
+  STG.busy = false; stgRerender();
+}
+function stgTermSet(id, k, f, v){
+  const t = STG.cfg.terminals.find(x=>x.id===id); if (!t) return;
+  if (k==="name") { const n = String(v||"").trim(); if (!n) { stgRerender(); return; } t.name = n; }
+  else { t[k] = t[k]||{prr:0,rate:0,free:0}; t[k][f] = f==="free" ? Math.round(stgN(v)) : stgN(v); }
+  stgCfgSave();
+}
+function stgAddTerm(city){
+  const name = prompt("Название терминала"+(city?" в городе «"+city+"»":"")+":"); if (!name || !name.trim()) return;
+  STG.cfg.terminals.push({ id:"n"+Math.random().toString(36).slice(2,8), city:city||"Без города", name:name.trim(), t20:{prr:0,rate:0,free:0}, t40:{prr:0,rate:0,free:0} });
+  STG.open["t:"+(city||"Без города")] = true; stgCfgSave();
+}
+function stgAddCity(){
+  const city = prompt("Название города:"); if (!city || !city.trim()) return; stgAddTerm(city.trim());
+}
+function stgCityRename(old, v){
+  const n = String(v||"").trim(); if (!n || n===old) { stgRerender(); return; }
+  STG.cfg.terminals.forEach(t=>{ if (t.city===old) t.city = n; }); stgCfgSave();
+}
+function stgDelTerm(id){
+  const t = STG.cfg.terminals.find(x=>x.id===id); if (!t) return;
+  if (!confirm("Удалить терминал «"+t.name+"» из списка? Уже загруженные месяцы не изменятся.")) return;
+  STG.cfg.terminals = STG.cfg.terminals.filter(x=>x.id!==id); stgCfgSave();
+}
+function stgTariffsHtml(){
+  const byCity = {}; STG.cfg.terminals.forEach(t=>{ (byCity[t.city] = byCity[t.city]||[]).push(t); });
+  const cities = Object.keys(byCity).sort((a,b)=>a.localeCompare(b,"ru"));
+  const inp = (t,k,f)=> '<td style="text-align:right"><input class="sx-in" type="text" inputmode="decimal" value="'+esc(String((t[k]&&t[k][f])||0).replace(".",","))+'" onfocus="this.select()" onchange="stgTermSet(\''+t.id+'\',\''+k+'\',\''+f+'\',this.value)"></td>';
+  const body = cities.map(c=>{
+    const open = STG.open["t:"+c] !== false, list = byCity[c].slice().sort((a,b)=>a.name.localeCompare(b.name,"ru"));
+    return '<div style="border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">'+
+      '<div style="display:flex;gap:8px;align-items:center;padding:8px 10px;background:#F2F6FA"><button class="btn" style="padding:2px 9px" data-k="t:'+esc(c)+'" onclick="STG.open[this.dataset.k]=STG.open[this.dataset.k]===false;stgRerender()">'+(open?'▾':'▸')+'</button>'+
+      '<input class="sx-name" style="font-weight:700;max-width:260px" value="'+esc(c)+'" title="Название города (изменится у всех его терминалов)" onchange="stgCityRename(this.defaultValue,this.value)">'+
+      '<span class="muted" style="font-size:12px">терминалов: '+list.length+'</span><span style="flex:1"></span><button class="btn" data-c="'+esc(c)+'" onclick="stgAddTerm(this.dataset.c)">+ Терминал</button></div>'+
+      (open ? '<div style="overflow-x:auto"><table style="margin:0"><thead><tr><th rowspan="2">Терминал</th><th colspan="3" style="text-align:center;border-bottom:1px solid var(--border)">20\'</th><th colspan="3" style="text-align:center;border-bottom:1px solid var(--border)">40\'</th><th rowspan="2"></th></tr>'+
+        '<tr><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th></tr></thead><tbody>'+
+        list.map(t=>'<tr><td><input class="sx-name" value="'+esc(t.name)+'" onchange="stgTermSet(\''+t.id+'\',\'name\',\'\',this.value)"></td>'+inp(t,"t20","prr")+inp(t,"t20","rate")+inp(t,"t20","free")+inp(t,"t40","prr")+inp(t,"t40","rate")+inp(t,"t40","free")+'<td><button class="sx-x" title="Удалить терминал" onclick="stgDelTerm(\''+t.id+'\')">✕</button></td></tr>').join("")+'</tbody></table></div>' : '')+'</div>';
+  }).join("");
+  return '<div class="panel"><p class="panel-title">Терминалы и тарифы</p>'+
+    expl('города и терминалы в них, у каждого свои ставки для 20\' и 40\'.','ПРР — стоимость одной крановой операции. Хранение — цена за сутки после бесплатных дней. Бесплатные дни считаются один раз от даты заезда контейнера. Изменение тарифа не меняет уже загруженные месяцы: для них есть кнопка «Пересчитать по текущим тарифам».')+
+    (cities.length ? body : '<p class="muted">Терминалов пока нет. Добавьте город и терминал или загрузите файл: неизвестные терминалы добавятся сами с нулевыми тарифами.</p>')+
+    '<div class="sx-act"><button class="btn btn-primary" onclick="stgAddCity()">+ Город</button></div></div>';
+}
+
+// ---------- расчёт ----------
+function stgAgg(){
+  const res = STG.res, cities = {};
+  Object.keys(res.byTerm).forEach(tid=>{
+    const t = STG.terms[tid]||{name:"?",city:"Без города"}, b = res.byTerm[tid];
+    const c = cities[t.city] || (cities[t.city] = { name:t.city, terms:[], s:{cnt20:0,cnt40:0,days:0,paid:0,st:0,ops:0,prr:0,tot:0,open:0} });
+    c.terms.push({ id:tid, name:t.name, b }); Object.keys(c.s).forEach(k=>{ c.s[k] += b[k]||0; });
+  });
+  const arr = Object.values(cities).sort((a,b)=>a.name.localeCompare(b.name,"ru")); arr.forEach(c=>c.terms.sort((a,b)=>a.name.localeCompare(b.name,"ru")));
+  return arr;
+}
+const stgCells = b => '<td class="num-cell">'+stgInt(b.cnt20)+'</td><td class="num-cell">'+stgInt(b.cnt40)+'</td><td class="num-cell">'+stgInt(b.days)+'</td><td class="num-cell">'+stgInt(b.paid)+'</td><td class="num-cell">'+stgMoney(b.st)+'</td><td class="num-cell">'+stgInt(b.ops)+'</td><td class="num-cell">'+stgMoney(b.prr)+'</td><td class="num-cell" style="font-weight:700">'+stgMoney(b.tot)+'</td>';
+function stgResultHtml(){
+  const label = stgMonthLabel(STG.ym);
+  if (!STG.res) return '<div class="panel"><p class="panel-title">Расчёт за '+label.toLowerCase()+'</p><p class="muted">За этот месяц данных нет. Нажмите «Загрузить файл» и выберите Excel с контейнерами.</p></div>';
+  const res = STG.res, t = res.tot, cities = stgAgg(), curM = STG.ym===STG.today.slice(0,7);
+  const note = t.open>0 ? (curM ? 'Контейнеры, которые ещё не выехали ('+stgInt(t.open)+' шт.), считаются по сегодняшнюю дату — '+stgDate(res.asOf)+'. После выезда сутки фиксируются.' : 'Контейнеры без даты выезда ('+stgInt(t.open)+' шт.) посчитаны до конца месяца.') : 'Все контейнеры месяца с датой выезда: расчёт зафиксирован.';
+  const rows = cities.map(c=>{
+    const open = !!STG.open["c:"+c.name];
+    return '<tr class="sx-city" data-k="c:'+esc(c.name)+'" onclick="stgToggle(this.dataset.k)"><td>'+(open?'▾ ':'▸ ')+esc(c.name)+' <span class="muted" style="font-weight:400;font-size:12px">('+c.terms.length+')</span></td>'+stgCells(c.s)+'</tr>'+
+      (open ? c.terms.map(x=>'<tr class="sx-term sx-row" title="Показать контейнеры этого терминала" onclick="stgPickTerm(\''+x.id+'\')"><td>'+esc(x.name)+'</td>'+stgCells(x.b)+'</tr>').join("") : '');
+  }).join("");
+  return '<div class="panel"><p class="panel-title">Расчёт за '+label.toLowerCase()+'</p>'+
+    '<p class="panel-sub">'+note+' Загружено '+stgWhen(STG.meta&&STG.meta.uploadedAt)+(STG.meta&&STG.meta.by?' ('+esc(STG.meta.by)+')':'')+'.</p>'+
+    '<div class="sx-cards"><div class="sx-card"><span>Итого к оплате</span><b>'+stgMoney(t.tot)+'</b></div><div class="sx-card"><span>Хранение</span><b>'+stgMoney(t.st)+'</b></div><div class="sx-card"><span>ПРР</span><b>'+stgMoney(t.prr)+'</b></div><div class="sx-card"><span>Контейнеров</span><b>'+stgInt(t.cnt20+t.cnt40)+'</b><span>20\': '+stgInt(t.cnt20)+' · 40\': '+stgInt(t.cnt40)+'</span></div></div>'+
+    (t.mism>0 ? '<div class="adm-warn">В файле у '+stgInt(t.mism)+' контейнеров количество суток не совпало с расчётом по датам. В списке контейнеров они помечены ⚠. Расчёт идёт по датам.</div>' : '')+
+    '<div class="sx-act"><button class="btn" onclick="stgAll(true)">Развернуть все города</button><button class="btn" onclick="stgAll(false)">Свернуть</button><button class="btn" onclick="stgRetariff()">Пересчитать по текущим тарифам</button><button class="btn" onclick="stgExport()">Выгрузить расчёт (CSV)</button><button class="btn" style="color:var(--danger)" onclick="stgDelMonth()">Удалить месяц</button></div>'+
+    '<div style="overflow-x:auto"><table><thead><tr><th>Город / терминал</th><th class="num-cell">20\'</th><th class="num-cell">40\'</th><th class="num-cell">Суток</th><th class="num-cell">Платных</th><th class="num-cell">Хранение</th><th class="num-cell">Кран. операций</th><th class="num-cell">ПРР</th><th class="num-cell">Итого</th></tr></thead><tbody>'+rows+
+    '<tr style="font-weight:800"><td>Всего</td>'+stgCells(t)+'</tr></tbody></table></div></div>';
+}
+function stgPickTerm(id){ STG.f.term = id; stgRerender(); const e = document.getElementById("stgDetail"); if (e) e.scrollIntoView({behavior:"smooth",block:"start"}); }
+function stgDetailHtml(){
+  if (!STG.res) return "";
+  const f = STG.f, q = f.q.trim().toUpperCase();
+  let rows = STG.res.rows.filter(r=> (!f.term || r.t===f.term) && (!q || r.c.indexOf(q)>=0) && (!f.paid || r.paid>0) && (!f.openOnly || r.open));
+  const total = rows.length; rows = rows.slice().sort((a,b)=>b.tot-a.tot).slice(0, STG.lim);
+  const tnames = Object.keys(STG.terms).map(id=>({id, label:STG.terms[id].city+" — "+STG.terms[id].name})).sort((a,b)=>a.label.localeCompare(b.label,"ru"));
+  return '<div class="panel" id="stgDetail"><p class="panel-title">Контейнеры</p><div class="sx-act">'+
+    '<select class="fld fld-sm" style="width:auto" onchange="STG.f.term=this.value;stgRerender()"><option value="">Все терминалы</option>'+tnames.map(o=>'<option value="'+o.id+'"'+(f.term===o.id?' selected':'')+'>'+esc(o.label)+'</option>').join("")+'</select>'+
+    '<input class="fld fld-sm" style="width:170px" placeholder="Номер контейнера" value="'+esc(f.q)+'" onchange="STG.f.q=this.value;stgRerender()">'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" '+(f.paid?'checked ':'')+'onchange="STG.f.paid=this.checked;stgRerender()"> только платные</label>'+
+    '<label class="auth-chk" style="margin:0"><input type="checkbox" '+(f.openOnly?'checked ':'')+'onchange="STG.f.openOnly=this.checked;stgRerender()"> ещё на терминале</label>'+
+    '<span class="muted" style="font-size:12px">найдено: '+stgInt(total)+(total>STG.lim?' (показаны '+STG.lim+' самых дорогих)':'')+'</span></div>'+
+    '<div style="overflow-x:auto"><table><thead><tr><th>Терминал</th><th>Контейнер</th><th>Размер</th><th>Заезд</th><th>Выезд</th><th class="num-cell">Суток</th><th class="num-cell">Беспл.</th><th class="num-cell">Платных</th><th class="num-cell">Хранение</th><th class="num-cell">Опер.</th><th class="num-cell">ПРР</th><th class="num-cell">Итого</th></tr></thead><tbody>'+
+    rows.map(r=>{ const t = STG.terms[r.t]||{name:"?"}; return '<tr><td>'+esc(t.name)+'</td><td>'+esc(r.c)+'</td><td>'+r.s+'\'</td><td>'+stgDate(r.i)+'</td><td>'+(r.open?'<span class="muted">на терминале</span>':stgDate(r.o))+'</td><td class="num-cell">'+r.days+(r.dx!==undefined?' <span title="В файле: '+r.dx+' сут." style="color:#B7791F">⚠</span>':'')+'</td><td class="num-cell">'+r.free+'</td><td class="num-cell">'+r.paid+'</td><td class="num-cell">'+stgMoney(r.st)+'</td><td class="num-cell">'+r.n+'</td><td class="num-cell">'+stgMoney(r.prr)+'</td><td class="num-cell" style="font-weight:700">'+stgMoney(r.tot)+'</td></tr>'; }).join("")+
+    '</tbody></table></div>'+(total>STG.lim?'<div class="sx-act"><button class="btn" onclick="STG.lim+=500;stgRerender()">Показать ещё</button></div>':'')+'</div>';
+}
+
+// ---------- действия над месяцем ----------
+async function stgRetariff(){
+  if (!confirm("Пересчитать "+stgMonthLabel(STG.ym).toLowerCase()+" по текущим тарифам? Прежние тарифы этого месяца будут заменены.")) return;
+  try { await api("POST","/api/storage/month/"+STG.ym+"/retariff"); mainToast("Пересчитано"); await stgReload(true); } catch(e){ mainToast(e.message); }
+}
+async function stgDelMonth(){
+  if (!confirm("Удалить все данные за "+stgMonthLabel(STG.ym).toLowerCase()+"? Это нельзя отменить из программы.")) return;
+  try { await api("DELETE","/api/storage/month/"+STG.ym); mainToast("Данные месяца удалены"); await stgReload(true); } catch(e){ mainToast(e.message); }
+}
+function stgDownload(name, text){
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(["﻿"+text],{type:"text/csv;charset=utf-8"})); a.download = name; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },500);
+}
+function stgExport(){
+  if (!STG.res) return; const cs = v=>'"'+String(v).replace(/"/g,'""')+'"', num = v=>String(v).replace(".",",");
+  const head = ["Город","Терминал","Контейнер","Размер","Заезд","Выезд","Кран. операций","Суток","Бесплатных дней","Платных суток","Хранение, ₽","ПРР, ₽","Итого, ₽"];
+  const lines = [head.join(";")].concat(STG.res.rows.map(r=>{ const t = STG.terms[r.t]||{name:"?",city:""}; return [cs(t.city),cs(t.name),cs(r.c),r.s,stgDate(r.i),r.open?"на терминале":stgDate(r.o),r.n,r.days,r.free,r.paid,num(r.st),num(r.prr),num(r.tot)].join(";"); }));
+  stgDownload("хранение-"+STG.ym+".csv", lines.join("\r\n"));
+}
+function stgTemplate(){
+  stgDownload("шаблон-хранение.csv", ["Терминал;Город;Контейнер;Размер;Дата заезда;Дата выезда;Крановые операции;Дней за месяц",
+    "Терминал А;Москва;ABCU1234567;20;03.11.2026;10.11.2026;2;8","Терминал А;Москва;WXYZ7654321;40;25.10.2026;;1;"].join("\r\n"));
+}
+
+// ---------- чтение файла ----------
+async function stgUnzip(buf){
+  const u8 = new Uint8Array(buf), dv = new DataView(buf); let e = -1;
+  for (let i=u8.length-22; i>=Math.max(0,u8.length-66000); i--) if (dv.getUint32(i,true)===0x06054b50) { e = i; break; }
+  if (e<0) throw new Error("Это не файл Excel (.xlsx). Сохраните таблицу как .xlsx или .csv");
+  const n = dv.getUint16(e+10,true); let p = dv.getUint32(e+16,true); const files = {};
+  for (let k=0;k<n;k++){ if (dv.getUint32(p,true)!==0x02014b50) break;
+    const method = dv.getUint16(p+10,true), csz = dv.getUint32(p+20,true), nl = dv.getUint16(p+28,true), el = dv.getUint16(p+30,true), cl = dv.getUint16(p+32,true), off = dv.getUint32(p+42,true);
+    files[new TextDecoder().decode(u8.subarray(p+46,p+46+nl))] = { method, csz, off }; p += 46+nl+el+cl; }
+  return { u8, dv, files };
+}
+async function stgZipText(z, name){
+  const f = z.files[name]; if (!f) return null;
+  const nl = z.dv.getUint16(f.off+26,true), el = z.dv.getUint16(f.off+28,true), st = f.off+30+nl+el, data = z.u8.subarray(st, st+f.csz);
+  if (f.method===0) return new TextDecoder().decode(data);
+  if (typeof DecompressionStream==="undefined") throw new Error("Браузер не умеет читать xlsx. Сохраните файл как CSV или откройте сайт в современном Chrome");
+  return await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).text();
+}
+function stgColIdx(ref){ const m = /^([A-Z]+)/.exec(ref||""); if (!m) return 0; let n = 0; for (const ch of m[1]) n = n*26 + ch.charCodeAt(0)-64; return n-1; }
+async function stgXlsx(buf){
+  const z = await stgUnzip(buf), dp = new DOMParser();
+  const shared = []; const sx = await stgZipText(z,"xl/sharedStrings.xml");
+  if (sx) Array.from(dp.parseFromString(sx,"application/xml").getElementsByTagName("si")).forEach(si=>{ shared.push(Array.from(si.getElementsByTagName("t")).map(t=>t.textContent).join("")); });
+  const name = z.files["xl/worksheets/sheet1.xml"] ? "xl/worksheets/sheet1.xml" : Object.keys(z.files).filter(n=>/^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort()[0];
+  if (!name) throw new Error("В файле нет листов");
+  const doc = dp.parseFromString(await stgZipText(z,name),"application/xml"), rows = [];
+  Array.from(doc.getElementsByTagName("row")).forEach(r=>{
+    const arr = [];
+    Array.from(r.getElementsByTagName("c")).forEach(c=>{
+      const idx = stgColIdx(c.getAttribute("r")), t = c.getAttribute("t"), v = c.getElementsByTagName("v")[0], is = c.getElementsByTagName("is")[0]; let val = "";
+      if (t==="s" && v) val = shared[+v.textContent]||""; else if (t==="inlineStr" && is) val = Array.from(is.getElementsByTagName("t")).map(x=>x.textContent).join("");
+      else if (v) { val = (t==="str"||t==="e"||t==="b") ? v.textContent : (isFinite(Number(v.textContent)) ? Number(v.textContent) : v.textContent); }
+      arr[idx] = val;
+    });
+    rows.push(Array.from(arr, x=>x===undefined?"":x));
+  });
+  return rows;
+}
+function stgCsv(text){
+  if (text.charCodeAt(0)===0xFEFF) text = text.slice(1);
+  const first = text.split(/\r?\n/,1)[0]; const delim = [";","\t",","].map(d=>[d,first.split(d).length]).sort((a,b)=>b[1]-a[1])[0][0];
+  const rows = []; let row = [], cur = "", q = false;
+  for (let i=0;i<text.length;i++){ const ch = text[i];
+    if (q) { if (ch==='"') { if (text[i+1]==='"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch==='"') q = true; else if (ch===delim) { row.push(cur); cur = ""; }
+    else if (ch==="\n"||ch==="\r") { if (ch==="\r" && text[i+1]==="\n") i++; row.push(cur); cur = ""; rows.push(row); row = []; } else cur += ch; }
+  if (cur!==""||row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+function stgIso(v){
+  if (v===null||v===undefined||v==="") return "";
+  if (typeof v==="number" || /^\d+(\.\d+)?$/.test(String(v).trim())) { const n = Number(v); if (n>20000 && n<80000) return new Date((Math.floor(n)-25569)*86400000).toISOString().slice(0,10); return "?"; }
+  const s = String(v).trim(); let m;
+  if ((m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s))) return m[1]+"-"+m[2].padStart(2,"0")+"-"+m[3].padStart(2,"0");
+  if ((m = /^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})/.exec(s))) { let y = m[3]; if (y.length===2) y = "20"+y; return y+"-"+m[2].padStart(2,"0")+"-"+m[1].padStart(2,"0"); }
+  return "?";
+}
+function stgSize(v){ const m = /(20|40|45)/.exec(String(v==null?"":v)); return m ? (m[1]==="20"?20:40) : 0; }
+const STG_COLS = [["out",/выезд|вывоз|убыт|выход|отгруз|\bout\b/],["in",/заезд|въезд|поступ|прибыт|\bin\b/],["ops",/операц|кран|ррр|прр|moves|ops/],["days",/^дн|сут|days/],["size",/размер|типоразмер|футов|size|^тип/],["ctn",/контейнер|номер|ктк|container|ctn/],["city",/город|city/],["term",/термин|terminal/]];
+const STG_LBL = { term:"Терминал", city:"Город", ctn:"Контейнер", size:"Размер", in:"Дата заезда", out:"Дата выезда", ops:"Крановые операции", days:"Дней за месяц" };
+function stgParse(table){
+  let hi = -1, map = null, best = 0;
+  for (let i=0;i<Math.min(table.length,20);i++){
+    const m = {}; (table[i]||[]).forEach((h,ci)=>{ const s = String(h||"").toLowerCase().replace(/ё/g,"е").trim(); if (!s) return; for (const [k,re] of STG_COLS) if (re.test(s) && m[k]===undefined) { m[k] = ci; break; } });
+    const sc = Object.keys(m).length; if (sc>best && m.term!==undefined && m.ctn!==undefined) { best = sc; hi = i; map = m; }
+  }
+  if (!map) throw new Error("Не нашёл строку заголовков. Нужны колонки: Терминал, Контейнер, Размер, Дата заезда, Дата выезда, Крановые операции");
+  const missing = ["size","in"].filter(k=>map[k]===undefined); if (missing.length) throw new Error("Не нашёл колонки: "+missing.map(k=>STG_LBL[k]).join(", "));
+  const rows = [];
+  for (let i=hi+1;i<table.length;i++){ const r = table[i]||[]; const g = k=> map[k]===undefined ? "" : r[map[k]];
+    if (!String(g("term")).trim() && !String(g("ctn")).trim()) continue;
+    const ops = Number(String(g("ops")).replace(",",".")); const days = g("days");
+    rows.push({ line:i+1, term:String(g("term")).trim(), city:String(g("city")).trim(), ctn:String(g("ctn")).trim(), size:stgSize(g("size")), inD:stgIso(g("in")), outD:stgIso(g("out")), ops:isFinite(ops)?Math.round(ops):0, days:(days===""||!isFinite(Number(days)))?null:Number(days) }); }
+  if (!rows.length) throw new Error("В файле нет строк с данными");
+  return { rows, map: Object.keys(map).map(k=>STG_LBL[k]+" → колонка "+(map[k]+1)) , noOut: map.out===undefined };
+}
+async function stgPick(inp){
+  const file = inp.files && inp.files[0]; inp.value = ""; if (!file) return; STG.upRes = null;
+  try {
+    const buf = await file.arrayBuffer(); let table;
+    if (/\.xlsx$/i.test(file.name) || (new Uint8Array(buf,0,2)[0]===0x50 && new Uint8Array(buf,0,2)[1]===0x4B)) table = await stgXlsx(buf);
+    else { let t = new TextDecoder("utf-8").decode(buf); if (t.indexOf("�")>=0) t = new TextDecoder("windows-1251").decode(buf); table = stgCsv(t); }
+    const p = stgParse(table); STG.upl = { name:file.name, rows:p.rows, map:p.map, noOut:p.noOut };
+  } catch(e){ STG.upl = { name:file.name, error:e.message||"Не получилось прочитать файл" }; }
+  stgRerender();
+}
+async function stgUpload(){
+  const u = STG.upl; if (!u || !u.rows) return; STG.busy = true; STG.upRes = null;
+  try { STG.upRes = await api("PUT","/api/storage/month/"+STG.ym,{ rows:u.rows }); STG.upl = null; mainToast("Данные за "+stgMonthLabel(STG.ym).toLowerCase()+" загружены"); }
+  catch(e){ STG.upRes = { error:e.message, errors:((e.data&&e.data.errors)||[]) }; }
+  STG.busy = false; await stgReload(true);
+}
+function stgUploadHtml(){
+  const label = stgMonthLabel(STG.ym), u = STG.upl, r = STG.upRes; let out = "";
+  if (u && u.error) out += '<div class="adm-warn"><b>'+esc(u.name)+':</b> '+esc(u.error)+'</div>';
+  if (u && u.rows) out += '<div class="adm-warn" style="background:#EEF6FF;border-color:#B7D3EE"><b>'+esc(u.name)+'</b>: найдено строк — '+stgInt(u.rows.length)+'. Распознано: '+esc(u.map.join("; "))+'.'+(u.noOut?' Колонки «Дата выезда» нет: все контейнеры считаются стоящими на терминале.':'')+
+    '<div class="sx-act"><button class="btn btn-primary" onclick="stgUpload()">Загрузить в «'+esc(label)+'»</button><button class="btn" onclick="STG.upl=null;stgRerender()">Отмена</button>'+(STG.res?'<span class="muted" style="font-size:12px">Данные этого месяца будут заменены.</span>':'')+'</div></div>';
+  if (r && r.error) out += '<div class="adm-warn"><b class="sx-bad">Не загружено:</b> '+esc(r.error)+(r.errors&&r.errors.length?'<br>'+r.errors.map(esc).join('<br>'):'')+'</div>';
+  if (r && r.ok) out += '<div class="adm-warn" style="background:#EDF9F0;border-color:#A9DDB8"><b class="sx-ok">Загружено: '+stgInt(r.accepted)+' строк.</b>'+
+    (r.outside?' Вне месяца пропущено: '+stgInt(r.outside)+'.':'')+(r.skipped?' С ошибками пропущено: '+stgInt(r.skipped)+'.':'')+
+    (r.created&&r.created.length?'<br>Добавлены новые терминалы: <b>'+r.created.map(esc).join(', ')+'</b>. Заполните их тарифы ниже и нажмите «Пересчитать по текущим тарифам».':'')+
+    (r.noTariff&&r.noTariff.length?'<br>Нет тарифов у: '+r.noTariff.map(esc).join(', ')+'.':'')+(r.errors&&r.errors.length?'<br><span class="muted">'+r.errors.slice(0,8).map(esc).join('<br>')+(r.errors.length>8?'<br>…':'')+'</span>':'')+'</div>';
+  return out;
+}
+
+// ---------- быстрый калькулятор ----------
+function stgCalcHtml(){
+  const c = STG.calc, terms = STG.cfg.terminals.slice().sort((a,b)=>(a.city+a.name).localeCompare(b.city+b.name,"ru"));
+  if (!terms.length) return "";
+  if (!c.tid || !terms.some(t=>t.id===c.tid)) c.tid = terms[0].id;
+  return '<div class="panel"><p class="panel-title">Быстрый расчёт</p><p class="panel-sub">Сколько стоит хранение, если контейнеры простоят столько-то суток.</p>'+
+    '<div class="adm-form" style="margin-top:0"><div><label class="auth-l">Терминал</label><select class="fld" onchange="stgCalcSet(\'tid\',this.value)">'+terms.map(t=>'<option value="'+t.id+'"'+(t.id===c.tid?' selected':'')+'>'+esc(t.city+" — "+t.name)+'</option>').join("")+'</select></div>'+
+    '<div><label class="auth-l">Размер</label><select class="fld" onchange="stgCalcSet(\'size\',this.value)"><option value="20"'+(c.size==="20"?' selected':'')+'>20\'</option><option value="40"'+(c.size==="40"?' selected':'')+'>40\'</option></select></div>'+
+    '<div><label class="auth-l">Контейнеров, шт</label><input class="fld" type="text" inputmode="numeric" value="'+c.qty+'" oninput="stgCalcSet(\'qty\',this.value)"></div>'+
+    '<div><label class="auth-l">Суток на терминале</label><input class="fld" type="text" inputmode="numeric" value="'+c.days+'" oninput="stgCalcSet(\'days\',this.value)"></div>'+
+    '<div><label class="auth-l">Кран. операций на контейнер</label><input class="fld" type="text" inputmode="numeric" value="'+c.ops+'" oninput="stgCalcSet(\'ops\',this.value)"></div></div>'+
+    '<div id="stgCalcOut" style="margin-top:12px">'+stgCalcOut()+'</div></div>';
+}
+function stgCalcOut(){
+  const c = STG.calc, t = STG.cfg.terminals.find(x=>x.id===c.tid); if (!t) return "";
+  const tf = (c.size==="40" ? t.t40 : t.t20)||{prr:0,rate:0,free:0}, qty = Math.max(0,Math.round(stgN(c.qty))), days = Math.max(0,Math.round(stgN(c.days))), ops = Math.max(0,Math.round(stgN(c.ops)));
+  const paid = Math.max(0, days-tf.free), st = qty*paid*tf.rate, prr = qty*ops*tf.prr;
+  return '<div class="sx-cards" style="margin:0"><div class="sx-card"><span>Платных суток на контейнер</span><b>'+paid+'</b><span>бесплатно: '+tf.free+' сут.</span></div><div class="sx-card"><span>Хранение</span><b>'+stgMoney(st)+'</b><span>'+stgMoney(tf.rate)+' за сутки</span></div><div class="sx-card"><span>ПРР</span><b>'+stgMoney(prr)+'</b><span>'+stgMoney(tf.prr)+' за операцию</span></div><div class="sx-card"><span>Итого</span><b>'+stgMoney(st+prr)+'</b></div></div>';
+}
+function stgCalcSet(k, v){ STG.calc[k] = v; const o = document.getElementById("stgCalcOut"); if (o) o.innerHTML = stgCalcOut(); }
+
+// ---------- месяцы ----------
+function stgMonthsHtml(){
+  if (!STG.months.length) return "";
+  return '<div class="panel"><p class="panel-title">Данные по месяцам</p><p class="panel-sub">Каждый месяц хранится отдельно. Нажмите на строку, чтобы открыть месяц.</p><div style="overflow-x:auto"><table><thead><tr><th>Месяц</th><th class="num-cell">Контейнеров</th><th class="num-cell">Хранение</th><th class="num-cell">ПРР</th><th class="num-cell">Итого</th><th>Загружено</th></tr></thead><tbody>'+
+    STG.months.map(m=>'<tr class="sx-row" onclick="stgSetMonth(\''+m.month+'\')"'+(m.month===STG.ym?' style="font-weight:700"':'')+'><td>'+stgMonthLabel(m.month)+'</td><td class="num-cell">'+stgInt(m.sum.cnt20+m.sum.cnt40)+'</td><td class="num-cell">'+stgMoney(m.sum.st)+'</td><td class="num-cell">'+stgMoney(m.sum.prr)+'</td><td class="num-cell" style="font-weight:700">'+stgMoney(m.sum.tot)+'</td><td class="muted" style="font-size:12px">'+stgWhen(m.uploadedAt)+(m.by?', '+esc(m.by):'')+'</td></tr>').join("")+'</tbody></table></div></div>';
+}
+
+// ---------- вкладка ----------
+function renderStorageTab(){
+  if (!storageTabVisible()) return '<div class="panel"><p class="muted">Раздел доступен только администратору и Эксплуатации.</p></div>';
+  if (!STG.loaded) { if (!STG.loading) stgLoad(); return '<div class="panel"><p class="muted">Загрузка…</p></div>'; }
+  if (STG.err) return '<div class="panel"><div class="adm-warn">'+esc(STG.err)+'</div><button class="btn" onclick="STG.loaded=false;STG.err=\'\';stgRerender()">Повторить</button></div>';
+  const head = '<div class="panel"><p class="panel-title">Хранение контейнеров на терминалах</p>'+
+    expl('расчёт стоимости хранения и ПРР по терминалам за выбранный месяц.','Загрузите Excel за месяц: терминал, номер контейнера, размер, дата заезда, дата выезда и количество крановых операций. Сутки считаются по датам, заезд и выезд — оба в счёт. Контейнер, который ещё не выехал, считается по сегодняшнюю дату. Бесплатные дни считаются один раз от даты заезда.')+
+    '<div class="sx-act"><label class="auth-l" style="margin:0">Месяц</label><input class="fld fld-sm" style="width:auto" type="month" value="'+esc(STG.ym)+'" onchange="stgSetMonth(this.value)">'+
+    '<input type="file" id="stgFile" accept=".xlsx,.csv,.txt" style="display:none" onchange="stgPick(this)"><button class="btn btn-primary" onclick="document.getElementById(\'stgFile\').click()">Загрузить файл</button><button class="btn" onclick="stgTemplate()">Шаблон файла</button></div>'+
+    stgUploadHtml()+'</div>';
+  return head + stgResultHtml() + stgDetailHtml() + stgTariffsHtml() + stgCalcHtml() + stgMonthsHtml();
 }
 
 render();

@@ -346,7 +346,7 @@ const stYmOk = s => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(s || ""));
 const stMF = ym => path.join(ST_DIR, "m-" + ym + ".json");
 function stWrite(f, obj) { try { if (fs.existsSync(f)) fs.copyFileSync(f, f + ".bak"); } catch (e) {} writeJson(f, obj); }
 function stNum(v, max) { const n = Number(String(v === undefined || v === null ? "" : v).replace(",", ".").replace(/\s/g, "")); return isFinite(n) && n >= 0 ? Math.min(Math.round(n * 100) / 100, max || 1e9) : 0; }
-function stTariff(t) { t = t || {}; return { prr: stNum(t.prr), rate: stNum(t.rate), free: Math.round(stNum(t.free, 3650)) }; }
+function stTariff(t) { t = t || {}; return { prr: stNum(t.prr), rate: stNum(t.rate), free: Math.round(stNum(t.free, 3650)), mon: stNum(t.mon) }; }
 // версии тарифов терминала: [{from:"YYYY-MM", t20, t40}], по возрастанию from; первая действует и на более ранние месяцы
 function stVersions(vs) {
   const m = new Map();
@@ -383,7 +383,7 @@ function stTermFor(mf, id, tm) {
 // • Крановые операции: 1 за заезд в этом месяце + 1 за выезд в этом месяце (0–2).
 function stCalc(mf, today, opts) {
   const tm = (opts && opts.tmonth) || mf.month, [ms, me_] = stMonthRange(mf.month), td = stDay(today), asOf = Math.min(td === null ? me_ : td, me_);
-  const tc = {}, out = [], by = {}, terms = {}, tot = { cnt20: 0, cnt40: 0, days: 0, paid: 0, st: 0, ops: 0, prr: 0, tot: 0, open: 0 };
+  const tc = {}, out = [], by = {}, terms = {}, monSeen = new Set(), tot = { cnt20: 0, cnt40: 0, days: 0, paid: 0, st: 0, ops: 0, prr: 0, mon: 0, tot: 0, open: 0 };
   for (const r of mf.rows || []) {
     const tmx = tc[r.t] !== undefined ? tc[r.t] : (tc[r.t] = stTermFor(mf, r.t, tm)); if (!tmx) continue;
     terms[r.t] = tmx;
@@ -391,18 +391,20 @@ function stCalc(mf, today, opts) {
     const start = Math.max(inD, ms), end = Math.min(outD !== null ? outD : asOf, me_), open = outD === null;
     const days = Math.max(0, end - start + 1), paid = Math.max(0, end - Math.max(start, inD + tf.free) + 1);
     const ops = (inD >= ms && inD <= me_ ? 1 : 0) + (outD !== null && outD >= ms && outD <= me_ ? 1 : 0);
-    const st = stR2(paid * tf.rate), prr = stR2(ops * tf.prr), row = { t: r.t, c: r.c, s: r.s, i: r.i, o: r.o || "", n: ops, days, free: tf.free, paid, st, prr, tot: stR2(st + prr), open };
+    // мониторинг: 1 раз за контейнер в месяц (повторный заезд того же номера в том же месяце не удваивает)
+    const mk = r.t + "|" + r.c, mon = monSeen.has(mk) ? 0 : (tf.mon || 0); monSeen.add(mk);
+    const st = stR2(paid * tf.rate), prr = stR2(ops * tf.prr), row = { t: r.t, c: r.c, s: r.s, i: r.i, o: r.o || "", n: ops, days, free: tf.free, paid, st, prr, mon, tot: stR2(st + prr + mon), open };
     out.push(row);
-    const b = by[r.t] || (by[r.t] = { cnt20: 0, cnt40: 0, days: 0, paid: 0, st: 0, ops: 0, prr: 0, tot: 0, open: 0 });
-    for (const o of [b, tot]) { if (r.s === 40) o.cnt40++; else o.cnt20++; o.days += days; o.paid += paid; o.st += st; o.ops += ops; o.prr += prr; o.tot += row.tot; if (open) o.open++; }
+    const b = by[r.t] || (by[r.t] = { cnt20: 0, cnt40: 0, days: 0, paid: 0, st: 0, ops: 0, prr: 0, mon: 0, tot: 0, open: 0 });
+    for (const o of [b, tot]) { if (r.s === 40) o.cnt40++; else o.cnt20++; o.days += days; o.paid += paid; o.st += st; o.ops += ops; o.prr += prr; o.mon += mon; o.tot += row.tot; if (open) o.open++; }
   }
-  for (const o of Object.values(by).concat([tot])) { o.st = stR2(o.st); o.prr = stR2(o.prr); o.tot = stR2(o.tot); }
+  for (const o of Object.values(by).concat([tot])) { o.st = stR2(o.st); o.prr = stR2(o.prr); o.mon = stR2(o.mon); o.tot = stR2(o.tot); }
   return { rows: out, byTerm: by, tot, terms, asOf: stIso(asOf) };
 }
 function stSnapTerms(ym) { const o = {}; for (const t of stCfg.terminals) { const r = stRates(t, ym); o[t.id] = { name: t.name, city: t.city, from: r.from, t20: r.t20, t40: r.t40 }; } return o; }
 function stIndexEntry(mf, res) {
   const tn = {}; for (const id of Object.keys(res.terms)) tn[id] = { n: res.terms[id].name, c: res.terms[id].city };
-  return { rows: (mf.rows || []).length, uploadedAt: mf.uploadedAt, by: mf.by, asOf: res.asOf, sum: res.tot, byTerm: res.byTerm, tn };
+  return { v: 2, rows: (mf.rows || []).length, uploadedAt: mf.uploadedAt, by: mf.by, asOf: res.asOf, sum: res.tot, byTerm: res.byTerm, tn };
 }
 function stList() {
   const today = mskToday(), months = []; let changed = false;
@@ -410,7 +412,7 @@ function stList() {
   for (const f of files) {
     const ym = f.slice(2, 9); const [, me_] = stMonthRange(ym), td = stDay(today), want = stIso(Math.min(td, me_));
     let e = stIdx[ym];
-    if (!e || e.asOf !== want || !e.byTerm) { const mf = readJson(path.join(ST_DIR, f), null); if (!mf) continue; e = stIdx[ym] = stIndexEntry(mf, stCalc(mf, today)); changed = true; }
+    if (!e || e.asOf !== want || !e.byTerm || e.v !== 2) { const mf = readJson(path.join(ST_DIR, f), null); if (!mf) continue; e = stIdx[ym] = stIndexEntry(mf, stCalc(mf, today)); changed = true; }
     months.push({ month: ym, rows: e.rows, uploadedAt: e.uploadedAt, by: e.by, asOf: e.asOf, sum: e.sum, byTerm: e.byTerm, tn: e.tn });
   }
   if (changed) { try { writeJson(ST_IDX_F, stIdx); } catch (e) {} }
@@ -657,7 +659,7 @@ const server = http.createServer(async (req, res) => {
           if (created.length) { stWrite(ST_CFG_F, stCfg); }
           const mf = { month: ym, uploadedAt: Date.now(), by: me.name, terms: stSnapTerms(ym), rows }, result = stCalc(mf, mskToday());
           stWrite(f, mf); stIdx[ym] = stIndexEntry(mf, result); try { writeJson(ST_IDX_F, stIdx); } catch (e) {}
-          const noTariff = Object.keys(result.byTerm).filter(id => { const t = result.terms[id]; return t && !t.t20.rate && !t.t40.rate && !t.t20.prr && !t.t40.prr; }).map(id => result.terms[id].name);
+          const noTariff = Object.keys(result.byTerm).filter(id => { const t = result.terms[id]; return t && !t.t20.rate && !t.t40.rate && !t.t20.prr && !t.t40.prr && !t.t20.mon && !t.t40.mon; }).map(id => result.terms[id].name);
           addLogText(me, "Хранение: загрузил(а) данные за " + ym + " (" + rows.length + " строк)"); broadcast("storage", {});
           return send(res, 200, { ok: true, accepted: rows.length, skipped, outside, dups, errors, created, noTariff });
         }

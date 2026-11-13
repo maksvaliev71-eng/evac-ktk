@@ -4460,7 +4460,7 @@ async function stgCfgSave(){
   catch(e){ mainToast(e.message||"Не получилось сохранить"); }
   STG.busy = false; stgRerender();
 }
-const stgZero = () => ({prr:0,rate:0,free:0});
+const stgZero = () => ({prr:0,rate:0,free:0,mon:0});
 function stgVerIdx(t, ym){ const vs = t.tariffs||[]; let r = 0; vs.forEach((v,i)=>{ if (v.from<=ym) r = i; }); return r; }
 function stgVer(t, ym){ const vs = t.tariffs||[]; return vs[stgVerIdx(t, ym||STG.ym)] || {from:"2000-01",t20:stgZero(),t40:stgZero()}; }
 function stgFromLbl(f){ return f<="2000-01" ? "с начала" : "с "+stgMonthLabel(f).toLowerCase(); }
@@ -4512,12 +4512,12 @@ function stgTariffsHtml(){
       '<div style="display:flex;gap:8px;align-items:center;padding:8px 10px;background:#F2F6FA"><button class="btn" style="padding:2px 9px" data-k="t:'+esc(c)+'" onclick="STG.open[this.dataset.k]=STG.open[this.dataset.k]===false;stgRerender()">'+(open?'▾':'▸')+'</button>'+
       '<input class="sx-name" style="font-weight:700;max-width:260px" value="'+esc(c)+'" title="Название города (изменится у всех его терминалов)" onchange="stgCityRename(this.defaultValue,this.value)">'+
       '<span class="muted" style="font-size:12px">терминалов: '+list.length+'</span><span style="flex:1"></span><button class="btn" data-c="'+esc(c)+'" onclick="stgAddTerm(this.dataset.c)">+ Терминал</button></div>'+
-      (open ? '<div style="overflow-x:auto"><table style="margin:0"><thead><tr><th rowspan="2">Терминал</th><th colspan="3" style="text-align:center;border-bottom:1px solid var(--border)">20\'</th><th colspan="3" style="text-align:center;border-bottom:1px solid var(--border)">40\'</th><th rowspan="2">Ставки</th><th rowspan="2"></th></tr>'+
-        '<tr><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th></tr></thead><tbody>'+
-        list.map(t=>'<tr><td><input class="sx-name" value="'+esc(t.name)+'" onchange="stgTermSet(\''+t.id+'\',\'name\',\'\',this.value)"></td>'+inp(t,"t20","prr")+inp(t,"t20","rate")+inp(t,"t20","free")+inp(t,"t40","prr")+inp(t,"t40","rate")+inp(t,"t40","free")+'<td style="font-size:12px;white-space:nowrap">'+stgVerCell(t)+'</td><td><button class="sx-x" title="Удалить терминал" onclick="stgDelTerm(\''+t.id+'\')">✕</button></td></tr>').join("")+'</tbody></table></div>' : '')+'</div>';
+      (open ? '<div style="overflow-x:auto"><table style="margin:0"><thead><tr><th rowspan="2">Терминал</th><th colspan="4" style="text-align:center;border-bottom:1px solid var(--border)">20\'</th><th colspan="4" style="text-align:center;border-bottom:1px solid var(--border)">40\'</th><th rowspan="2">Ставки</th><th rowspan="2"></th></tr>'+
+        '<tr><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th><th style="text-align:right" title="1 раз за контейнер в месяц">Мониторинг, ₽/мес</th><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th><th style="text-align:right" title="1 раз за контейнер в месяц">Мониторинг, ₽/мес</th></tr></thead><tbody>'+
+        list.map(t=>'<tr><td><input class="sx-name" value="'+esc(t.name)+'" onchange="stgTermSet(\''+t.id+'\',\'name\',\'\',this.value)"></td>'+inp(t,"t20","prr")+inp(t,"t20","rate")+inp(t,"t20","free")+inp(t,"t20","mon")+inp(t,"t40","prr")+inp(t,"t40","rate")+inp(t,"t40","free")+inp(t,"t40","mon")+'<td style="font-size:12px;white-space:nowrap">'+stgVerCell(t)+'</td><td><button class="sx-x" title="Удалить терминал" onclick="stgDelTerm(\''+t.id+'\')">✕</button></td></tr>').join("")+'</tbody></table></div>' : '')+'</div>';
   }).join("");
   return '<div class="panel"><p class="panel-title">Терминалы и тарифы</p>'+
-    expl('города и терминалы в них, у каждого свои ставки для 20\' и 40\'.','ПРР — стоимость одной крановой операции. Хранение — цена за сутки после бесплатных дней. Бесплатные дни считаются один раз от даты заезда контейнера. Ставки меняются со временем: откройте нужный месяц сверху и нажмите «Новые с …» — новые ставки начнут действовать с этого месяца, а прежние останутся для прошлых месяцев (их видно в колонке «Ставки»). Цифры в таблице — это ставки, действующие в выбранном месяце; исправить их можно прямо тут.')+
+    expl('города и терминалы в них, у каждого свои ставки для 20\' и 40\'.','ПРР — стоимость одной крановой операции. Хранение — цена за сутки после бесплатных дней. Мониторинг — фиксированная сумма за контейнер: берётся один раз за контейнер в месяц, сколько бы он ни стоял. Бесплатные дни считаются один раз от даты заезда контейнера. Ставки меняются со временем: откройте нужный месяц сверху и нажмите «Новые с …» — новые ставки начнут действовать с этого месяца, а прежние останутся для прошлых месяцев (их видно в колонке «Ставки»). Цифры в таблице — это ставки, действующие в выбранном месяце; исправить их можно прямо тут.')+
     (cities.length ? body : '<p class="muted">Терминалов пока нет. Добавьте город и терминал или загрузите файл: неизвестные терминалы добавятся сами с нулевыми тарифами.</p>')+
     '<div class="sx-act"><button class="btn btn-primary" onclick="stgAddCity()">+ Город</button></div></div>';
 }
@@ -4527,13 +4527,13 @@ function stgAgg(){
   const res = STG.res, cities = {};
   Object.keys(res.byTerm).forEach(tid=>{
     const t = STG.terms[tid]||{name:"?",city:"Без города"}, b = res.byTerm[tid];
-    const c = cities[t.city] || (cities[t.city] = { name:t.city, terms:[], s:{cnt20:0,cnt40:0,days:0,paid:0,st:0,ops:0,prr:0,tot:0,open:0} });
+    const c = cities[t.city] || (cities[t.city] = { name:t.city, terms:[], s:{cnt20:0,cnt40:0,days:0,paid:0,st:0,ops:0,prr:0,mon:0,tot:0,open:0} });
     c.terms.push({ id:tid, name:t.name, b }); Object.keys(c.s).forEach(k=>{ c.s[k] += b[k]||0; });
   });
   const arr = Object.values(cities).sort((a,b)=>a.name.localeCompare(b.name,"ru")); arr.forEach(c=>c.terms.sort((a,b)=>a.name.localeCompare(b.name,"ru")));
   return arr;
 }
-const stgCells = b => '<td class="num-cell">'+stgInt(b.cnt20)+'</td><td class="num-cell">'+stgInt(b.cnt40)+'</td><td class="num-cell">'+stgInt(b.days)+'</td><td class="num-cell">'+stgInt(b.paid)+'</td><td class="num-cell">'+stgMoney(b.st)+'</td><td class="num-cell">'+stgInt(b.ops)+'</td><td class="num-cell">'+stgMoney(b.prr)+'</td><td class="num-cell" style="font-weight:700">'+stgMoney(b.tot)+'</td>';
+const stgCells = b => '<td class="num-cell">'+stgInt(b.cnt20)+'</td><td class="num-cell">'+stgInt(b.cnt40)+'</td><td class="num-cell">'+stgInt(b.days)+'</td><td class="num-cell">'+stgInt(b.paid)+'</td><td class="num-cell">'+stgMoney(b.st)+'</td><td class="num-cell">'+stgInt(b.ops)+'</td><td class="num-cell">'+stgMoney(b.prr)+'</td><td class="num-cell">'+stgMoney(b.mon)+'</td><td class="num-cell" style="font-weight:700">'+stgMoney(b.tot)+'</td>';
 function stgResultHtml(){
   const label = stgMonthLabel(STG.ym);
   if (!STG.res) return '<div class="panel"><p class="panel-title">Расчёт за '+label.toLowerCase()+'</p><p class="muted">За этот месяц данных нет. Нажмите «Загрузить файл» и выберите Excel с контейнерами.</p></div>';
@@ -4546,26 +4546,27 @@ function stgResultHtml(){
   }).join("");
   return '<div class="panel"><p class="panel-title">Расчёт за '+label.toLowerCase()+'</p>'+
     '<p class="panel-sub">'+note+' Загружено '+stgWhen(STG.meta&&STG.meta.uploadedAt)+(STG.meta&&STG.meta.by?' ('+esc(STG.meta.by)+')':'')+'.</p>'+
-    '<div class="sx-cards"><div class="sx-card"><span>Итого к оплате</span><b>'+stgMoney(t.tot)+'</b></div><div class="sx-card"><span>Хранение</span><b>'+stgMoney(t.st)+'</b></div><div class="sx-card"><span>ПРР</span><b>'+stgMoney(t.prr)+'</b></div><div class="sx-card"><span>Контейнеров</span><b>'+stgInt(t.cnt20+t.cnt40)+'</b><span>20\': '+stgInt(t.cnt20)+' · 40\': '+stgInt(t.cnt40)+'</span></div></div>'+
+    '<div class="sx-cards"><div class="sx-card"><span>Итого к оплате</span><b>'+stgMoney(t.tot)+'</b></div><div class="sx-card"><span>Хранение</span><b>'+stgMoney(t.st)+'</b></div><div class="sx-card"><span>ПРР</span><b>'+stgMoney(t.prr)+'</b></div><div class="sx-card"><span>Мониторинг</span><b>'+stgMoney(t.mon)+'</b></div><div class="sx-card"><span>Контейнеров</span><b>'+stgInt(t.cnt20+t.cnt40)+'</b><span>20\': '+stgInt(t.cnt20)+' · 40\': '+stgInt(t.cnt40)+'</span></div></div>'+
     '<div class="sx-act"><button class="btn" onclick="stgAll(true)">Развернуть все города</button><button class="btn" onclick="stgAll(false)">Свернуть</button><button class="btn" onclick="stgExport()">Выгрузить расчёт (CSV)</button><button class="btn" style="color:var(--danger)" onclick="stgDelMonth()">Удалить месяц</button></div>'+
-    '<div style="overflow-x:auto"><table><thead><tr><th>Город / терминал</th><th class="num-cell">20\'</th><th class="num-cell">40\'</th><th class="num-cell">Суток</th><th class="num-cell">Платных</th><th class="num-cell">Хранение</th><th class="num-cell">Кран. операций</th><th class="num-cell">ПРР</th><th class="num-cell">Итого</th></tr></thead><tbody>'+rows+
+    '<div style="overflow-x:auto"><table><thead><tr><th>Город / терминал</th><th class="num-cell">20\'</th><th class="num-cell">40\'</th><th class="num-cell">Суток</th><th class="num-cell">Платных</th><th class="num-cell">Хранение</th><th class="num-cell">Кран. операций</th><th class="num-cell">ПРР</th><th class="num-cell">Мониторинг</th><th class="num-cell">Итого</th></tr></thead><tbody>'+rows+
     '<tr style="font-weight:800"><td>Всего</td>'+stgCells(t)+'</tr></tbody></table></div></div>';
 }
-function stgPickTerm(id){ STG.f.term = id; stgRerender(); const e = document.getElementById("stgDetail"); if (e) e.scrollIntoView({behavior:"smooth",block:"start"}); }
+function stgPickTerm(id){ STG.showDet = true; STG.f.term = id; stgRerender(); const e = document.getElementById("stgDetail"); if (e) e.scrollIntoView({behavior:"smooth",block:"start"}); }
 function stgDetailHtml(){
   if (!STG.res) return "";
+  if (!STG.showDet) return '<div class="panel" id="stgDetail"><div class="sx-act" style="margin:0"><p class="panel-title" style="margin:0">Контейнеры</p><span class="muted" style="font-size:12px">'+stgInt(STG.res.rows.length)+' строк — скрыты, чтобы не загромождать лист</span><span style="flex:1"></span><button class="btn" onclick="STG.showDet=true;stgRerender()">Показать контейнеры</button></div></div>';
   const f = STG.f, q = f.q.trim().toUpperCase();
   let rows = STG.res.rows.filter(r=> (!f.term || r.t===f.term) && (!q || r.c.indexOf(q)>=0) && (!f.paid || r.paid>0) && (!f.openOnly || r.open));
   const total = rows.length; rows = rows.slice().sort((a,b)=>b.tot-a.tot).slice(0, STG.lim);
   const tnames = Object.keys(STG.terms).map(id=>({id, label:STG.terms[id].city+" — "+STG.terms[id].name})).sort((a,b)=>a.label.localeCompare(b.label,"ru"));
-  return '<div class="panel" id="stgDetail"><p class="panel-title">Контейнеры</p><div class="sx-act">'+
+  return '<div class="panel" id="stgDetail"><div class="sx-act" style="margin:0"><p class="panel-title" style="margin:0">Контейнеры</p><span style="flex:1"></span><button class="btn" onclick="STG.showDet=false;stgRerender()">Скрыть</button></div><div class="sx-act">'+
     '<select class="fld fld-sm" style="width:auto" onchange="STG.f.term=this.value;stgRerender()"><option value="">Все терминалы</option>'+tnames.map(o=>'<option value="'+o.id+'"'+(f.term===o.id?' selected':'')+'>'+esc(o.label)+'</option>').join("")+'</select>'+
     '<input class="fld fld-sm" style="width:170px" placeholder="Номер контейнера" value="'+esc(f.q)+'" onchange="STG.f.q=this.value;stgRerender()">'+
     '<label class="auth-chk" style="margin:0"><input type="checkbox" '+(f.paid?'checked ':'')+'onchange="STG.f.paid=this.checked;stgRerender()"> только платные</label>'+
     '<label class="auth-chk" style="margin:0"><input type="checkbox" '+(f.openOnly?'checked ':'')+'onchange="STG.f.openOnly=this.checked;stgRerender()"> ещё на терминале</label>'+
     '<span class="muted" style="font-size:12px">найдено: '+stgInt(total)+(total>STG.lim?' (показаны '+STG.lim+' самых дорогих)':'')+'</span></div>'+
-    '<div style="overflow-x:auto"><table><thead><tr><th>Терминал</th><th>Контейнер</th><th>Размер</th><th>Заезд</th><th>Выезд</th><th class="num-cell">Суток</th><th class="num-cell">Беспл.</th><th class="num-cell">Платных</th><th class="num-cell">Хранение</th><th class="num-cell">Опер.</th><th class="num-cell">ПРР</th><th class="num-cell">Итого</th></tr></thead><tbody>'+
-    rows.map(r=>{ const t = STG.terms[r.t]||{name:"?"}; return '<tr><td>'+esc(t.name)+'</td><td>'+esc(r.c)+'</td><td>'+r.s+'\'</td><td>'+stgDate(r.i)+'</td><td>'+(r.open?'<span class="muted">на терминале</span>':stgDate(r.o))+'</td><td class="num-cell">'+r.days+'</td><td class="num-cell">'+r.free+'</td><td class="num-cell">'+r.paid+'</td><td class="num-cell">'+stgMoney(r.st)+'</td><td class="num-cell">'+r.n+'</td><td class="num-cell">'+stgMoney(r.prr)+'</td><td class="num-cell" style="font-weight:700">'+stgMoney(r.tot)+'</td></tr>'; }).join("")+
+    '<div style="overflow-x:auto"><table><thead><tr><th>Терминал</th><th>Контейнер</th><th>Размер</th><th>Заезд</th><th>Выезд</th><th class="num-cell">Суток</th><th class="num-cell">Беспл.</th><th class="num-cell">Платных</th><th class="num-cell">Хранение</th><th class="num-cell">Опер.</th><th class="num-cell">ПРР</th><th class="num-cell">Монит.</th><th class="num-cell">Итого</th></tr></thead><tbody>'+
+    rows.map(r=>{ const t = STG.terms[r.t]||{name:"?"}; return '<tr><td>'+esc(t.name)+'</td><td>'+esc(r.c)+'</td><td>'+r.s+'\'</td><td>'+stgDate(r.i)+'</td><td>'+(r.open?'<span class="muted">на терминале</span>':stgDate(r.o))+'</td><td class="num-cell">'+r.days+'</td><td class="num-cell">'+r.free+'</td><td class="num-cell">'+r.paid+'</td><td class="num-cell">'+stgMoney(r.st)+'</td><td class="num-cell">'+r.n+'</td><td class="num-cell">'+stgMoney(r.prr)+'</td><td class="num-cell">'+stgMoney(r.mon)+'</td><td class="num-cell" style="font-weight:700">'+stgMoney(r.tot)+'</td></tr>'; }).join("")+
     '</tbody></table></div>'+(total>STG.lim?'<div class="sx-act"><button class="btn" onclick="STG.lim+=500;stgRerender()">Показать ещё</button></div>':'')+'</div>';
 }
 
@@ -4579,8 +4580,8 @@ function stgDownload(name, text){
 }
 function stgExport(){
   if (!STG.res) return; const cs = v=>'"'+String(v).replace(/"/g,'""')+'"', num = v=>String(v).replace(".",",");
-  const head = ["Город","Терминал","Контейнер","Размер","Заезд","Выезд","Кран. операций","Суток","Бесплатных дней","Платных суток","Хранение, ₽","ПРР, ₽","Итого, ₽"];
-  const lines = [head.join(";")].concat(STG.res.rows.map(r=>{ const t = STG.terms[r.t]||{name:"?",city:""}; return [cs(t.city),cs(t.name),cs(r.c),r.s,stgDate(r.i),r.open?"на терминале":stgDate(r.o),r.n,r.days,r.free,r.paid,num(r.st),num(r.prr),num(r.tot)].join(";"); }));
+  const head = ["Город","Терминал","Контейнер","Размер","Заезд","Выезд","Кран. операций","Суток","Бесплатных дней","Платных суток","Хранение, ₽","ПРР, ₽","Мониторинг, ₽","Итого, ₽"];
+  const lines = [head.join(";")].concat(STG.res.rows.map(r=>{ const t = STG.terms[r.t]||{name:"?",city:""}; return [cs(t.city),cs(t.name),cs(r.c),r.s,stgDate(r.i),r.open?"на терминале":stgDate(r.o),r.n,r.days,r.free,r.paid,num(r.st),num(r.prr),num(r.mon),num(r.tot)].join(";"); }));
   stgDownload("хранение-"+STG.ym+".csv", lines.join("\r\n"));
 }
 function stgTemplate(){
@@ -4717,9 +4718,9 @@ function stgCalcHtml(){
 }
 function stgCalcOut(){
   const c = STG.calc, t = STG.cfg.terminals.find(x=>x.id===c.tid); if (!t) return "";
-  const vv = stgVer(t), tf = (c.size==="40" ? vv.t40 : vv.t20)||{prr:0,rate:0,free:0}, qty = Math.max(0,Math.round(stgN(c.qty))), days = Math.max(0,Math.round(stgN(c.days))), ops = Math.max(0,Math.round(stgN(c.ops)));
-  const paid = Math.max(0, days-tf.free), st = qty*paid*tf.rate, prr = qty*ops*tf.prr;
-  return '<div class="sx-cards" style="margin:0"><div class="sx-card"><span>Платных суток на контейнер</span><b>'+paid+'</b><span>бесплатно: '+tf.free+' сут.</span></div><div class="sx-card"><span>Хранение</span><b>'+stgMoney(st)+'</b><span>'+stgMoney(tf.rate)+' за сутки</span></div><div class="sx-card"><span>ПРР</span><b>'+stgMoney(prr)+'</b><span>'+stgMoney(tf.prr)+' за операцию</span></div><div class="sx-card"><span>Итого</span><b>'+stgMoney(st+prr)+'</b></div></div>';
+  const vv = stgVer(t), tf = (c.size==="40" ? vv.t40 : vv.t20)||{prr:0,rate:0,free:0,mon:0}, qty = Math.max(0,Math.round(stgN(c.qty))), days = Math.max(0,Math.round(stgN(c.days))), ops = Math.max(0,Math.round(stgN(c.ops)));
+  const paid = Math.max(0, days-tf.free), st = qty*paid*tf.rate, prr = qty*ops*tf.prr, mon = qty*(tf.mon||0);
+  return '<div class="sx-cards" style="margin:0"><div class="sx-card"><span>Платных суток на контейнер</span><b>'+paid+'</b><span>бесплатно: '+tf.free+' сут.</span></div><div class="sx-card"><span>Хранение</span><b>'+stgMoney(st)+'</b><span>'+stgMoney(tf.rate)+' за сутки</span></div><div class="sx-card"><span>ПРР</span><b>'+stgMoney(prr)+'</b><span>'+stgMoney(tf.prr)+' за операцию</span></div><div class="sx-card"><span>Мониторинг</span><b>'+stgMoney(mon)+'</b><span>'+stgMoney(tf.mon||0)+' за контейнер в месяц</span></div><div class="sx-card"><span>Итого</span><b>'+stgMoney(st+prr+mon)+'</b></div></div>';
 }
 function stgCalcSet(k, v){ STG.calc[k] = v; const o = document.getElementById("stgCalcOut"); if (o) o.innerHTML = stgCalcOut(); }
 
@@ -4729,8 +4730,60 @@ function stgContHtml(){
   return '<div class="adm-warn"><b>Проверьте файл:</b> в конце '+esc(stgMonthLabel(c.prev).toLowerCase())+' на терминалах стояло контейнеров, которых нет в этом файле: <b>'+stgInt(c.count)+'</b>'+(c.count>c.list.length?' (показаны первые '+c.list.length+')':'')+'. Если они выехали раньше — это нормально, но тогда в файле прошлого месяца у них должна быть дата выезда. Иначе в этом месяце их хранение не посчитано.'+
     '<details style="margin-top:6px"><summary style="cursor:pointer">Показать список</summary><div style="font-size:12px;margin-top:4px">'+c.list.map(x=>esc(x.t)+' · '+esc(x.c)+' · '+x.s+'\' · заезд '+stgDate(x.i)).join('<br>')+'</div></details></div>';
 }
+// ---------- дашборды ----------
+const stgTeu = b => (b.cnt20||0) + 2*(b.cnt40||0), stgCnt = b => (b.cnt20||0) + (b.cnt40||0);
+function stgSvgBars(labels, series, fmt, o){
+  o = o||{}; const W = 700, H = 210, pl = 8, pr = 8, pt = 18, pb = 22, n = labels.length, stack = !!o.stack;
+  const tot = i => series.reduce((a,sr)=>a+(sr.vals[i]||0),0);
+  const mx = Math.max(1, ...labels.map((_,i)=> stack ? tot(i) : Math.max(...series.map(sr=>sr.vals[i]||0)))), gw = (W-pl-pr)/n, k = stack ? 1 : series.length, bw = Math.min(34, gw*0.8/k);
+  const Y = v => pt + (H-pt-pb)*(1-v/mx); let out = '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-height:240px" role="img"><line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+Y(0)+'" y2="'+Y(0)+'" stroke="#d6dde3"/>';
+  labels.forEach((lb,i)=>{ const cx = pl+gw*(i+0.5); let acc = 0;
+    series.forEach((sr,j)=>{ const v = sr.vals[i]; if (v===null||v===undefined) return; const x = stack ? cx-bw/2 : cx-(bw*k)/2+bw*j, y0 = stack ? Y(acc) : Y(0), y1 = stack ? Y(acc+v) : Y(v); acc += v;
+      out += '<rect x="'+x.toFixed(1)+'" y="'+Math.min(y0,y1).toFixed(1)+'" width="'+(bw-1).toFixed(1)+'" height="'+Math.max(0,Math.abs(y0-y1)).toFixed(1)+'" fill="'+sr.color+'" rx="2"><title>'+esc(sr.name)+', '+esc(lb)+': '+fmt(v)+'</title></rect>'; });
+    const top = stack ? tot(i) : Math.max(...series.map(sr=>sr.vals[i]||0)); if (o.labels && top>0) out += '<text x="'+cx.toFixed(1)+'" y="'+(Y(top)-3).toFixed(1)+'" font-size="9.5" text-anchor="middle" fill="#46515e">'+(o.short?o.short(top):fmt(top))+'</text>';
+    out += '<text x="'+cx.toFixed(1)+'" y="'+(H-6)+'" font-size="10" text-anchor="middle" fill="#6b7785">'+esc(lb)+'</text>'; });
+  return out+'</svg><div style="font-size:12px;display:flex;gap:12px;flex-wrap:wrap">'+series.map(sr=>'<span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+sr.color+';margin-right:4px"></i>'+esc(sr.name)+'</span>').join("")+'</div>';
+}
+const stgShort = v => v>=1e6 ? (v/1e6).toFixed(1).replace(".",",")+" млн" : v>=1e3 ? Math.round(v/1e3)+" тыс" : String(Math.round(v));
+const stgPct = (cur, prev) => !(prev>0) ? "" : ((cur-prev)/prev*100>=0?"+":"")+((cur-prev)/prev*100).toFixed(1).replace(".",",")+"%";
+function stgDashHtml(){
+  const an = STG.an; if (!an || !an.months || !an.months.length) return "";
+  const ms = an.months, last12 = ms.slice(-12), mn = m => MONTH_NAMES[+m.month.slice(5,7)-1].slice(0,3).toLowerCase()+" "+m.month.slice(2,4)+(m.partial?"*":"");
+  const sum = m => m.tot||{};
+  // 1. общий расход по месяцам
+  const c1 = stgSvgBars(last12.map(mn), [{name:"Хранение",color:"#2F6FB0",vals:last12.map(m=>sum(m).st||0)},{name:"ПРР",color:"#E0A030",vals:last12.map(m=>sum(m).prr||0)},{name:"Мониторинг",color:"#7C6BB0",vals:last12.map(m=>sum(m).mon||0)}], stgMoney, {stack:true,labels:true,short:stgShort});
+  // 2. по городам за выбранный месяц + объём
+  const cm = ms.find(m=>m.month===STG.ym) || ms[ms.length-1], cities = {};
+  Object.keys(cm.byTerm||{}).forEach(id=>{ const c = (an.terms[id]||{c:"Без города"}).c, b = cm.byTerm[id], a = cities[c] || (cities[c] = {tot:0,st:0,prr:0,mon:0,c20:0,c40:0}); a.tot += b.tot; a.st += b.st; a.prr += b.prr; a.mon += b.mon||0; a.c20 += b.cnt20||0; a.c40 += b.cnt40||0; });
+  const cl = Object.keys(cities).sort((a,b)=>cities[b].tot-cities[a].tot), cmx = Math.max(1,...cl.map(c=>cities[c].tot));
+  const c2 = cl.map((c,i)=>{ const a = cities[c], n = a.c20+a.c40, w = a.tot/cmx*100;
+    return '<div style="display:grid;grid-template-columns:140px 1fr;gap:10px;align-items:center;margin:7px 0"><div style="font-weight:600;font-size:13px">'+esc(c)+'</div><div>'+
+      '<div style="background:#EEF2F6;border-radius:5px;height:20px;overflow:hidden"><div style="width:'+w.toFixed(1)+'%;height:100%;background:'+STG_COLORS[i%STG_COLORS.length]+'"></div></div>'+
+      '<div style="font-size:12px;margin-top:2px"><b>'+stgMoney(a.tot)+'</b> <span class="muted">(хранение '+stgMoney(a.st)+' + ПРР '+stgMoney(a.prr)+' + мониторинг '+stgMoney(a.mon)+')</span> · объём: <b>'+stgInt(n)+' конт.</b> <span class="muted">(20\': '+stgInt(a.c20)+', 40\': '+stgInt(a.c40)+', '+stgInt(a.c20+2*a.c40)+' TEU)</span>'+(n?' · '+stgMoney(a.tot/n)+' на контейнер':'')+'</div></div></div>'; }).join("");
+  // 3. год к году
+  const years = [...new Set(ms.map(m=>m.month.slice(0,4)))].sort(), yy = (STG.yoyY && years.includes(STG.yoyY)) ? STG.yoyY : years[years.length-1], py = String(+yy-1);
+  const by = {}; ms.forEach(m=>{ by[m.month] = m; });
+  const mon = Array.from({length:12},(_,i)=>String(i+1).padStart(2,"0")), rows = mon.map(mm=>({mm, a:by[py+"-"+mm], b:by[yy+"-"+mm]}));
+  const has = rows.filter(r=>r.a||r.b), cc = (v,cost)=>'color:'+(v>0?(cost?'var(--danger)':'var(--ok)'):v<0?(cost?'var(--ok)':'var(--danger)'):'inherit');
+  const mshort = mm => MONTH_NAMES[+mm-1].slice(0,3).toLowerCase();
+  const chCost = stgSvgBars(has.map(r=>mshort(r.mm)), [{name:py,color:"#9DB4CC",vals:has.map(r=>r.a?sum(r.a).tot:null)},{name:yy,color:"#2F6FB0",vals:has.map(r=>r.b?sum(r.b).tot:null)}], stgMoney, {labels:true,short:stgShort});
+  const chVol = stgSvgBars(has.map(r=>mshort(r.mm)), [{name:py,color:"#B9CDB9",vals:has.map(r=>r.a?stgCnt(sum(r.a)):null)},{name:yy,color:"#2E8B57",vals:has.map(r=>r.b?stgCnt(sum(r.b)):null)}], stgInt, {labels:true,short:v=>stgInt(v)});
+  const tr = has.map(r=>{ const A = r.a?sum(r.a):null, B = r.b?sum(r.b):null, dc = A&&B?B.tot-A.tot:null, dv = A&&B?stgCnt(B)-stgCnt(A):null;
+    return '<tr><td>'+MONTH_NAMES[+r.mm-1]+(r.b&&r.b.partial?'*':'')+'</td><td class="num-cell">'+(A?stgMoney(A.tot):'—')+'</td><td class="num-cell">'+(B?stgMoney(B.tot):'—')+'</td><td class="num-cell" style="'+(dc!==null?cc(dc,1):'')+'">'+(dc!==null?(dc>0?'+':'')+stgMoney(dc)+'<div style="font-size:11px">'+stgPct(B.tot,A.tot)+'</div>':'—')+'</td>'+
+      '<td class="num-cell">'+(A?stgInt(stgCnt(A)):'—')+'</td><td class="num-cell">'+(B?stgInt(stgCnt(B)):'—')+'</td><td class="num-cell" style="'+(dv!==null?cc(dv,1):'')+'">'+(dv!==null?(dv>0?'+':'')+stgInt(dv)+'<div style="font-size:11px">'+stgPct(stgCnt(B),stgCnt(A))+'</div>':'—')+'</td>'+
+      '<td class="num-cell">'+(A&&stgCnt(A)?stgMoney(A.tot/stgCnt(A)):'—')+'</td><td class="num-cell">'+(B&&stgCnt(B)?stgMoney(B.tot/stgCnt(B)):'—')+'</td></tr>'; }).join("");
+  const both = has.filter(r=>r.a&&r.b&&!r.b.partial), sa = both.reduce((a,r)=>a+sum(r.a).tot,0), sb = both.reduce((a,r)=>a+sum(r.b).tot,0), va = both.reduce((a,r)=>a+stgCnt(sum(r.a)),0), vb = both.reduce((a,r)=>a+stgCnt(sum(r.b)),0);
+  const yoy = years.length<2 && !has.some(r=>r.a) ? '<p class="muted">Для сравнения нужны данные за прошлый год. Загрузите файлы за соответствующие месяцы, и таблица заполнится.</p>' :
+    '<div class="sx-cards"><div class="sx-card"><span>Расходы, общие месяцы '+yy+' к '+py+'</span><b>'+stgMoney(sb)+'</b><span>было '+stgMoney(sa)+' · '+(both.length?stgPct(sb,sa):'—')+'</span></div><div class="sx-card"><span>Контейнеров, общие месяцы</span><b>'+stgInt(vb)+'</b><span>было '+stgInt(va)+' · '+(both.length?stgPct(vb,va):'—')+'</span></div><div class="sx-card"><span>Месяцев в сравнении</span><b>'+both.length+'</b><span>с данными в обоих годах, без незаконченного месяца</span></div></div>'+
+    '<p class="panel-sub" style="margin-top:8px">Расходы</p>'+chCost+'<p class="panel-sub" style="margin-top:10px">Объём (контейнеров за месяц)</p>'+chVol+
+    '<div style="overflow-x:auto;margin-top:10px"><table><thead><tr><th rowspan="2">Месяц</th><th colspan="3" style="text-align:center;border-bottom:1px solid var(--border)">Расходы, ₽</th><th colspan="3" style="text-align:center;border-bottom:1px solid var(--border)">Контейнеров</th><th colspan="2" style="text-align:center;border-bottom:1px solid var(--border)">₽ на контейнер</th></tr><tr><th class="num-cell">'+py+'</th><th class="num-cell">'+yy+'</th><th class="num-cell">Изменение</th><th class="num-cell">'+py+'</th><th class="num-cell">'+yy+'</th><th class="num-cell">Изменение</th><th class="num-cell">'+py+'</th><th class="num-cell">'+yy+'</th></tr></thead><tbody>'+tr+'</tbody></table></div>';
+  return '<div class="panel"><p class="panel-title">Дашборд: общие расходы по месяцам</p><p class="panel-sub">Хранение, ПРР и мониторинг по всем городам вместе, последние 12 месяцев. * — месяц ещё не закончен.</p>'+c1+'</div>'+
+    '<div class="panel"><p class="panel-title">Дашборд: расходы по городам за '+esc(stgMonthLabel(cm.month).toLowerCase())+(cm.partial?'*':'')+'</p><p class="panel-sub">Длина полосы — сумма расходов, рядом объём контейнеров. Месяц выбирается наверху листа.</p>'+(cl.length?c2:'<p class="muted">Нет данных.</p>')+'</div>'+
+    '<div class="panel"><p class="panel-title">Дашборд: '+yy+' к '+py+' (одни и те же месяцы)</p><div class="sx-act"><label class="auth-l" style="margin:0">Год</label><select class="fld fld-sm" style="width:auto" onchange="STG.yoyY=this.value;stgRerender()">'+years.map(y=>'<option'+(y===yy?' selected':'')+'>'+y+'</option>').join("")+'</select><span class="muted" style="font-size:12px">Рост расходов и объёма — красным, снижение — зелёным.</span></div>'+yoy+'</div>';
+}
+
 // ---------- аналитика по месяцам ----------
-const STG_MET = { tot:["Итого, ₽",b=>b.tot,1], st:["Хранение, ₽",b=>b.st,1], prr:["ПРР, ₽",b=>b.prr,1], cnt:["Контейнеров",b=>(b.cnt20||0)+(b.cnt40||0),0], paid:["Платных суток",b=>b.paid,0], ops:["Кран. операций",b=>b.ops,0] };
+const STG_MET = { tot:["Итого, ₽",b=>b.tot,1], st:["Хранение, ₽",b=>b.st,1], prr:["ПРР, ₽",b=>b.prr,1], mon:["Мониторинг, ₽",b=>b.mon||0,1], cnt:["Контейнеров",b=>(b.cnt20||0)+(b.cnt40||0),0], paid:["Платных суток",b=>b.paid,0], ops:["Кран. операций",b=>b.ops,0] };
 const STG_COLORS = ["#2F6FB0","#C2591B","#2E8B57","#8A5AB8","#B38A00","#C23B5A","#4A7F8A","#6B6B6B"];
 function stgDelta(cur, prev, cost){
   if (prev===undefined || prev===null || !(prev>0)) return '';
@@ -4796,11 +4849,11 @@ function renderStorageTab(){
   if (!STG.loaded) { if (!STG.loading) stgLoad(); return '<div class="panel"><p class="muted">Загрузка…</p></div>'; }
   if (STG.err) return '<div class="panel"><div class="adm-warn">'+esc(STG.err)+'</div><button class="btn" onclick="STG.loaded=false;STG.err=\'\';stgRerender()">Повторить</button></div>';
   const head = '<div class="panel"><p class="panel-title">Хранение контейнеров на терминалах</p>'+
-    expl('расчёт стоимости хранения и ПРР по терминалам за выбранный месяц.','Считаются только порожние контейнеры (колонка «Груз»: груженые пропускаются). Загрузите Excel за месяц (подойдёт выгрузка терминала): терминал, контейнер, размер, «Принят» (заезд), «Отправлен» (выезд). Крановые операции и платные сутки считаются сами: в каждом месяце — 1 ПРР за заезд в этом месяце и 1 за выезд в этом месяце (от 0 до 2). Сутки считаются только в пределах месяца, заезд и выезд — оба в счёт, поэтому контейнер, стоящий несколько месяцев, не считается дважды. Не выехавший — до сегодняшней даты. Бесплатные дни — один раз от даты заезда.')+
+    expl('расчёт стоимости хранения и ПРР по терминалам за выбранный месяц.','Считаются только порожние контейнеры (колонка «Груз»: груженые пропускаются). Загрузите Excel за месяц (подойдёт выгрузка терминала): терминал, контейнер, размер, «Принят» (заезд), «Отправлен» (выезд). Крановые операции и платные сутки считаются сами: в каждом месяце — 1 ПРР за заезд в этом месяце и 1 за выезд в этом месяце (от 0 до 2). Сутки считаются только в пределах месяца, заезд и выезд — оба в счёт, поэтому контейнер, стоящий несколько месяцев, не считается дважды. Не выехавший — до сегодняшней даты. Бесплатные дни — один раз от даты заезда. Мониторинг — один раз за контейнер в месяц.')+
     '<div class="sx-act"><label class="auth-l" style="margin:0">Месяц</label><input class="fld fld-sm" style="width:auto" type="month" value="'+esc(STG.ym)+'" onchange="stgSetMonth(this.value)">'+
     '<input type="file" id="stgFile" accept=".xlsx,.csv,.txt" style="display:none" onchange="stgPick(this)"><button class="btn btn-primary" onclick="document.getElementById(\'stgFile\').click()">Загрузить файл</button><button class="btn" onclick="stgTemplate()">Шаблон файла</button></div>'+
     stgUploadHtml()+'</div>';
-  return head + stgContHtml() + stgResultHtml() + stgAnalyticsHtml() + stgDetailHtml() + stgTariffsHtml() + stgCalcHtml() + stgMonthsHtml();
+  return head + stgContHtml() + stgResultHtml() + stgDashHtml() + stgAnalyticsHtml() + stgDetailHtml() + stgTariffsHtml() + stgCalcHtml() + stgMonthsHtml();
 }
 
 render();

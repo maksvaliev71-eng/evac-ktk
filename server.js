@@ -105,7 +105,10 @@ function deadlineLocked(kind) {
 function fmtDate(d) { const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? m[3] + "." + m[2] + "." + m[1] : d; }
 function writeDenied(me, id) {
   if (!canWriteDoc(me, id)) return "Нет прав на изменение этой части данных";
-  if (me.dept !== "admin") {
+  if (me.dept !== "admin" && areaOfDoc(id) === "routes") {
+    // поезда: срок проверяется по изменённым полям (см. обработчик PUT); целиком документ закрыт, только если закрыты оба срока
+    if (deadlineLocked("rail") && deadlineLocked("fact")) return "Срок внесения истёк (" + fmtDate(ext.deadlines.rail || ext.deadlines.fact) + "). Обратитесь к администратору";
+  } else if (me.dept !== "admin") {
     const ak = AREA_KIND[areaOfDoc(id)];
     // отдел без права на весь раздел «Импорт» (Эксплуатация вносит только факт) подчиняется сроку «факт», а не сроку отдела «Импорт»
     const kind = ak ? ((areaOfDoc(id) === "import" && !permsFor(me.dept).includes("import")) ? "fact" : ak.kind) : null;
@@ -332,6 +335,59 @@ function weeklyCheck() {
   ext.lastWeekly = today; writeJson(EXT_F, ext); sendReport(r, weeklyRcpts());
 }
 
+
+// ---------- хранение контейнеров на терминалах (только админ и Эксплуатация) ----------
+const ST_DIR = path.join(DATA_DIR, "storage"); fs.mkdirSync(ST_DIR, { recursive: true });
+const ST_CFG_F = path.join(ST_DIR, "config.json"), ST_IDX_F = path.join(ST_DIR, "index.json");
+let stCfg = readJson(ST_CFG_F, { terminals: [] }); if (!Array.isArray(stCfg.terminals)) stCfg.terminals = [];
+let stIdx = readJson(ST_IDX_F, {});
+const stOk = me => !!me && (me.dept === "admin" || me.dept === "expl");
+const stYmOk = s => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(s || ""));
+const stMF = ym => path.join(ST_DIR, "m-" + ym + ".json");
+function stWrite(f, obj) { try { if (fs.existsSync(f)) fs.copyFileSync(f, f + ".bak"); } catch (e) {} writeJson(f, obj); }
+function stNum(v, max) { const n = Number(String(v === undefined || v === null ? "" : v).replace(",", ".").replace(/\s/g, "")); return isFinite(n) && n >= 0 ? Math.min(Math.round(n * 100) / 100, max || 1e9) : 0; }
+function stTariff(t) { t = t || {}; return { prr: stNum(t.prr), rate: stNum(t.rate), free: Math.round(stNum(t.free, 3650)) }; }
+function stDay(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || "")); if (!m) return null;
+  const t = Date.UTC(+m[1], +m[2] - 1, +m[3]); if (new Date(t).getUTCMonth() !== +m[2] - 1) return null; return Math.round(t / 86400000);
+}
+function stMonthRange(ym) { const y = +ym.slice(0, 4), m = +ym.slice(5, 7); return [Math.round(Date.UTC(y, m - 1, 1) / 86400000), Math.round(Date.UTC(y, m, 0) / 86400000)]; }
+const stR2 = v => Math.round(v * 100) / 100;
+// расчёт месяца. Контейнер без выезда считается по «сегодня» (но не дальше конца месяца); после выезда сутки фиксируются.
+// Сутки заезда и выезда считаются оба. Бесплатные дни — один раз от даты заезда (в т.ч. заезд в прошлом месяце).
+function stCalc(mf, today) {
+  const [ms, me_] = stMonthRange(mf.month), td = stDay(today), asOf = Math.min(td === null ? me_ : td, me_);
+  const terms = mf.terms || {}, out = [], by = {}, tot = { cnt20: 0, cnt40: 0, days: 0, paid: 0, st: 0, ops: 0, prr: 0, tot: 0, open: 0, mism: 0 };
+  for (const r of mf.rows || []) {
+    const tm = terms[r.t]; if (!tm) continue;
+    const tf = r.s === 40 ? tm.t40 : tm.t20, inD = stDay(r.i), outD = r.o ? stDay(r.o) : null; if (inD === null) continue;
+    const start = Math.max(inD, ms), end = Math.min(outD !== null ? outD : asOf, me_), open = outD === null;
+    const days = Math.max(0, end - start + 1), paid = Math.max(0, end - Math.max(start, inD + tf.free) + 1);
+    const st = stR2(paid * tf.rate), prr = stR2((r.n || 0) * tf.prr), row = { t: r.t, c: r.c, s: r.s, i: r.i, o: r.o || "", n: r.n || 0, days, free: tf.free, paid, st, prr, tot: stR2(st + prr), open };
+    if (r.d !== null && r.d !== undefined && r.d !== "" && Number(r.d) !== days) { row.dx = Number(r.d); tot.mism++; }
+    out.push(row);
+    const b = by[r.t] || (by[r.t] = { cnt20: 0, cnt40: 0, days: 0, paid: 0, st: 0, ops: 0, prr: 0, tot: 0, open: 0 });
+    for (const o of [b, tot]) { if (r.s === 40) o.cnt40++; else o.cnt20++; o.days += days; o.paid += paid; o.st += st; o.ops += r.n || 0; o.prr += prr; o.tot += row.tot; if (open) o.open++; }
+  }
+  for (const o of Object.values(by).concat([tot])) { o.st = stR2(o.st); o.prr = stR2(o.prr); o.tot = stR2(o.tot); }
+  return { rows: out, byTerm: by, tot, asOf: new Date(asOf * 86400000).toISOString().slice(0, 10) };
+}
+function stSnapTerms() { const o = {}; for (const t of stCfg.terminals) o[t.id] = { name: t.name, city: t.city, t20: stTariff(t.t20), t40: stTariff(t.t40) }; return o; }
+function stIndexEntry(mf, res) { return { rows: (mf.rows || []).length, uploadedAt: mf.uploadedAt, by: mf.by, asOf: res.asOf, sum: res.tot }; }
+function stList() {
+  const today = mskToday(), months = []; let changed = false;
+  let files = []; try { files = fs.readdirSync(ST_DIR).filter(f => /^m-\d{4}-\d{2}\.json$/.test(f)); } catch (e) {}
+  for (const f of files) {
+    const ym = f.slice(2, 9); const [, me_] = stMonthRange(ym), td = stDay(today), want = new Date(Math.min(td, me_) * 86400000).toISOString().slice(0, 10);
+    let e = stIdx[ym];
+    if (!e || e.asOf !== want) { const mf = readJson(path.join(ST_DIR, f), null); if (!mf) continue; e = stIdx[ym] = stIndexEntry(mf, stCalc(mf, today)); changed = true; }
+    months.push({ month: ym, rows: e.rows, uploadedAt: e.uploadedAt, by: e.by, asOf: e.asOf, sum: e.sum });
+  }
+  if (changed) { try { writeJson(ST_IDX_F, stIdx); } catch (e) {} }
+  return months.sort((a, b) => b.month.localeCompare(a.month));
+}
+function stNorm(s) { return String(s || "").trim().toLowerCase().replace(/\s+/g, " "); }
+
 // ---------- автоматические резервные копии ----------
 function backupList() {
   try { return fs.readdirSync(BK_DIR).filter(f => /^evac-[0-9a-z-]{4,40}\.json$/.test(f)).map(f => { const st = fs.statSync(path.join(BK_DIR, f)); return { name: f, t: st.mtimeMs, size: st.size }; }).sort((a, b) => b.t - a.t); } catch (e) { return []; }
@@ -495,6 +551,70 @@ const server = http.createServer(async (req, res) => {
       if (me.dept !== "admin" && c.u !== me.id) return send(res, 403, { error: "Удалить можно только свой комментарий" });
       ext.comments = ext.comments.filter(x => x.id !== mc[1]); saveExt(); return send(res, 200, { ok: true });
     }
+    if (p.startsWith("/api/storage")) {
+      if (!stOk(me)) return send(res, 403, { error: "Раздел доступен только администратору и Эксплуатации" });
+      if (p === "/api/storage" && req.method === "GET") return send(res, 200, { cfg: stCfg, months: stList(), today: mskToday() });
+      if (p === "/api/storage/cfg" && req.method === "PUT") {
+        const b = await readBody(req, 2000000); if (!Array.isArray(b.terminals) || b.terminals.length > 300) return send(res, 400, { error: "Неверные данные" });
+        const used = new Set(), list = [];
+        for (const t of b.terminals) {
+          const name = String(t.name || "").trim().slice(0, 80); if (!name) continue;
+          let id = /^[0-9a-f]{8}$/.test(String(t.id || "")) && !used.has(t.id) ? t.id : ""; while (!id || used.has(id)) id = crypto.randomBytes(4).toString("hex");
+          used.add(id); list.push({ id, city: String(t.city || "").trim().slice(0, 60) || "Без города", name, t20: stTariff(t.t20), t40: stTariff(t.t40) });
+        }
+        stCfg = { terminals: list }; stWrite(ST_CFG_F, stCfg); addLogText(me, "Хранение: изменил(а) терминалы и тарифы"); broadcast("storage", {});
+        return send(res, 200, { ok: true, cfg: stCfg });
+      }
+      let sm;
+      if ((sm = p.match(/^\/api\/storage\/month\/(\d{4}-\d{2})(\/retariff)?$/)) && stYmOk(sm[1])) {
+        const ym = sm[1], f = stMF(ym);
+        if (!sm[2] && req.method === "GET") {
+          const mf = readJson(f, null); if (!mf) return send(res, 404, { error: "Нет данных за этот месяц" });
+          const result = stCalc(mf, mskToday()); stIdx[ym] = stIndexEntry(mf, result);
+          return send(res, 200, { month: ym, uploadedAt: mf.uploadedAt, by: mf.by, terms: mf.terms, result });
+        }
+        if (!sm[2] && req.method === "DELETE") {
+          if (!fs.existsSync(f)) return send(res, 404, { error: "Нет данных" });
+          try { fs.copyFileSync(f, f + ".deleted"); fs.unlinkSync(f); } catch (e) {} delete stIdx[ym]; try { writeJson(ST_IDX_F, stIdx); } catch (e) {}
+          addLogText(me, "Хранение: удалил(а) данные за " + ym); broadcast("storage", {}); return send(res, 200, { ok: true });
+        }
+        if (sm[2] && req.method === "POST") {
+          const mf = readJson(f, null); if (!mf) return send(res, 404, { error: "Нет данных" });
+          const snap = stSnapTerms(); for (const id of Object.keys(mf.terms || {})) if (snap[id]) mf.terms[id] = snap[id];
+          stWrite(f, mf); stIdx[ym] = stIndexEntry(mf, stCalc(mf, mskToday())); try { writeJson(ST_IDX_F, stIdx); } catch (e) {}
+          addLogText(me, "Хранение: пересчитал(а) " + ym + " по текущим тарифам"); broadcast("storage", {}); return send(res, 200, { ok: true });
+        }
+        if (!sm[2] && req.method === "PUT") {
+          const b = await readBody(req, 40000000); if (!Array.isArray(b.rows)) return send(res, 400, { error: "Нет строк" });
+          const [ms, me_] = stMonthRange(ym), errors = [], created = [], rows = []; let skipped = 0, outside = 0;
+          const find = (name, city) => {
+            const n = stNorm(name), c = stNorm(city); const same = stCfg.terminals.filter(t => stNorm(t.name) === n);
+            if (same.length === 1) return same[0]; if (same.length > 1 && c) return same.find(t => stNorm(t.city) === c) || null; return same.length ? same[0] : null;
+          };
+          for (let k = 0; k < b.rows.length; k++) {
+            const r = b.rows[k] || {}, line = r.line || (k + 2), name = String(r.term || "").trim(), ctn = String(r.ctn || "").trim().toUpperCase().slice(0, 30);
+            const size = Number(r.size) === 40 ? 40 : Number(r.size) === 20 ? 20 : 0, inD = stDay(r.inD), outD = r.outD ? stDay(r.outD) : null;
+            const bad = !name ? "нет терминала" : !ctn ? "нет номера контейнера" : !size ? "размер должен быть 20 или 40" : inD === null ? "неверная дата заезда" : (r.outD && outD === null) ? "неверная дата выезда" : (outD !== null && outD < inD) ? "выезд раньше заезда" : "";
+            if (bad) { skipped++; if (errors.length < 40) errors.push("Строка " + line + ": " + bad); continue; }
+            if (inD > me_ || (outD !== null && outD < ms)) { outside++; continue; }
+            let tm = find(name, r.city);
+            if (!tm) {
+              let id; do { id = crypto.randomBytes(4).toString("hex"); } while (stCfg.terminals.some(t => t.id === id));
+              tm = { id, city: String(r.city || "").trim().slice(0, 60) || "Без города", name: name.slice(0, 80), t20: stTariff(), t40: stTariff() }; stCfg.terminals.push(tm); created.push(tm.name);
+            }
+            rows.push({ t: tm.id, c: ctn, s: size, i: String(r.inD), o: outD !== null ? String(r.outD) : "", n: Math.max(0, Math.min(100000, Math.round(Number(r.ops) || 0))), d: (r.days === "" || r.days === null || r.days === undefined || !isFinite(Number(r.days))) ? null : Number(r.days) });
+          }
+          if (!rows.length) return send(res, 400, { error: "Ни одной подходящей строки", errors, outside });
+          if (created.length) { stWrite(ST_CFG_F, stCfg); }
+          const mf = { month: ym, uploadedAt: Date.now(), by: me.name, terms: stSnapTerms(), rows }, result = stCalc(mf, mskToday());
+          stWrite(f, mf); stIdx[ym] = stIndexEntry(mf, result); try { writeJson(ST_IDX_F, stIdx); } catch (e) {}
+          const noTariff = Object.keys(result.byTerm).filter(id => { const t = mf.terms[id]; return t && !t.t20.rate && !t.t40.rate && !t.t20.prr && !t.t40.prr; }).map(id => mf.terms[id].name);
+          addLogText(me, "Хранение: загрузил(а) данные за " + ym + " (" + rows.length + " строк)"); broadcast("storage", {});
+          return send(res, 200, { ok: true, accepted: rows.length, skipped, outside, errors, created, noTariff });
+        }
+      }
+      return send(res, 404, { error: "Не найдено" });
+    }
     if (p === "/api/presence" && req.method === "POST") {
       const b = await readBody(req, 1000), key = String(b.key || "").slice(0, 80);
       if (key && b.on !== false) presence.set(me.id, { key, name: me.name, t: Date.now() }); else presence.delete(me.id);
@@ -515,6 +635,11 @@ const server = http.createServer(async (req, res) => {
         const den = writeDenied(me, id); if (den) return send(res, 403, { error: den });
         let b = await readBody(req, 2 * 1024 * 1024);
         if (!b || typeof b !== "object" || Array.isArray(b)) return send(res, 400, { error: "Неверные данные" });
+        if (id === "routes" && me.dept !== "admin") {
+          const fa0 = flatten(appDocs.routes || {}, "", {}), fb0 = flatten(b, "", {}), ks = new Set();
+          for (const k of new Set(Object.keys(fa0).concat(Object.keys(fb0)))) if (fa0[k] !== fb0[k]) ks.add(/\.fact$/.test(k) ? "fact" : "rail");
+          for (const kd of ks) if (deadlineLocked(kd)) return send(res, 403, { error: "Срок внесения истёк (" + fmtDate(ext.deadlines[kd]) + "). Обратитесь к администратору" });
+        }
         const pf = partialFields(me, id);
         if (pf) { // меняем только разрешённые поля, всё остальное остаётся как было
           const out = JSON.parse(JSON.stringify(appDocs[id] || {}));

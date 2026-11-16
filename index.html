@@ -4464,22 +4464,20 @@ const stgZero = () => ({prr:0,rate:0,free:0,mon:0});
 function stgVerIdx(t, ym){ const vs = t.tariffs||[]; let r = 0; vs.forEach((v,i)=>{ if (v.from<=ym) r = i; }); return r; }
 function stgVer(t, ym){ const vs = t.tariffs||[]; return vs[stgVerIdx(t, ym||STG.ym)] || {from:"2000-01",t20:stgZero(),t40:stgZero()}; }
 function stgFromLbl(f){ return f<="2000-01" ? "с начала" : "с "+stgMonthLabel(f).toLowerCase(); }
-function stgTermSet(id, k, f, v){
-  const t = STG.cfg.terminals.find(x=>x.id===id); if (!t) return;
+function stgTermSet(id, k, f, v, ym){
+  const t = STG.cfg.terminals.find(x=>x.id===id); if (!t) return; ym = ym || STG.ym;
   if (k==="name") { const n = String(v||"").trim(); if (!n) { stgRerender(); return; } t.name = n; }
-  else { t.tariffs = t.tariffs||[{from:"2000-01",t20:stgZero(),t40:stgZero()}]; const ver = t.tariffs[stgVerIdx(t,STG.ym)]; ver[k] = ver[k]||stgZero(); ver[k][f] = f==="free" ? Math.round(stgN(v)) : stgN(v); }
+  else {
+    t.tariffs = t.tariffs && t.tariffs.length ? t.tariffs : [{from:"2000-01",t20:stgZero(),t40:stgZero()}];
+    let ver = t.tariffs[stgVerIdx(t,ym)];
+    if (ver.from!==ym) { // у месяца своих ставок ещё нет: создаём, а следующий месяц оставляем со старыми, чтобы правка не «уехала» вперёд
+      const old = JSON.parse(JSON.stringify(ver)), nx = stgNextYm(ym);
+      if (!t.tariffs.some(x=>x.from===nx)) t.tariffs.push({ from:nx, t20:old.t20, t40:old.t40 });
+      ver = { from:ym, t20:Object.assign({},old.t20), t40:Object.assign({},old.t40) }; t.tariffs.push(ver); t.tariffs.sort((a,b)=>a.from.localeCompare(b.from));
+    }
+    ver[k] = ver[k]||stgZero(); ver[k][f] = f==="free" ? Math.round(stgN(v)) : stgN(v);
+  }
   stgCfgSave();
-}
-function stgNewVer(id){
-  const t = STG.cfg.terminals.find(x=>x.id===id); if (!t) return; const cur = stgVer(t);
-  if (cur.from===STG.ym) { mainToast("Ставки с этого месяца уже есть — просто измените цифры"); return; }
-  t.tariffs.push({ from:STG.ym, t20:Object.assign({},cur.t20), t40:Object.assign({},cur.t40) }); t.tariffs.sort((a,b)=>a.from.localeCompare(b.from));
-  mainToast("Создан новый тариф "+stgFromLbl(STG.ym)+" — измените цифры. Прежние ставки сохранены для прошлых месяцев."); stgCfgSave();
-}
-function stgDelVer(id, from){
-  const t = STG.cfg.terminals.find(x=>x.id===id); if (!t || t.tariffs.length<2) return;
-  if (!confirm("Удалить тариф «"+stgFromLbl(from)+"»? Месяцы начнут считаться по предыдущему тарифу.")) return;
-  t.tariffs = t.tariffs.filter(v=>v.from!==from); stgCfgSave();
 }
 function stgAddTerm(city){
   const name = prompt("Название терминала"+(city?" в городе «"+city+"»":"")+":"); if (!name || !name.trim()) return;
@@ -4498,28 +4496,52 @@ function stgDelTerm(id){
   if (!confirm("Убрать терминал «"+t.name+"» из списка? Загруженные месяцы и история тарифов останутся.")) return;
   t.archived = true; stgCfgSave();
 }
-function stgVerCell(t){
-  const v = stgVer(t), hist = t.tariffs.length>1 ? '<div class="muted" style="margin-top:2px">'+t.tariffs.map(x=>'<span style="'+(x.from===v.from?'font-weight:700;color:var(--ink)':'')+'">'+stgFromLbl(x.from)+': '+stgMoney(x.t20.rate)+' / '+stgMoney(x.t40.rate)+'</span>'+(t.tariffs.length>1&&x.from>"2000-01"?' <button class="sx-x" style="font-size:12px" title="Удалить этот тариф" onclick="stgDelVer(\''+t.id+'\',\''+x.from+'\')">✕</button>':'')).join('<br>')+'</div>' : '';
-  return '<div>Действуют '+stgFromLbl(v.from)+'</div><button class="btn" style="padding:2px 8px;font-size:12px;margin-top:3px" title="Создать новые ставки, действующие с выбранного месяца ('+esc(stgMonthLabel(STG.ym))+'). Старые сохранятся." onclick="stgNewVer(\''+t.id+'\')">Новые с '+esc(stgMonthLabel(STG.ym).toLowerCase())+'</button>'+hist;
-}
-function stgTariffsHtml(){
+function stgTariffsBody(ym){
   const byCity = {}; STG.cfg.terminals.filter(t=>!t.archived).forEach(t=>{ (byCity[t.city] = byCity[t.city]||[]).push(t); });
   const cities = Object.keys(byCity).sort((a,b)=>a.localeCompare(b,"ru"));
-  const inp = (t,k,f)=> '<td style="text-align:right"><input class="sx-in" type="text" inputmode="decimal" value="'+esc(String((stgVer(t)[k]&&stgVer(t)[k][f])||0).replace(".",","))+'" onfocus="this.select()" onchange="stgTermSet(\''+t.id+'\',\''+k+'\',\''+f+'\',this.value)"></td>';
+  const inp = (t,k,f)=> '<td style="text-align:right"><input class="sx-in" type="text" inputmode="decimal" value="'+esc(String((stgVer(t,ym)[k]&&stgVer(t,ym)[k][f])||0).replace(".",","))+'" onfocus="this.select()" onchange="stgTermSet(\''+t.id+'\',\''+k+'\',\''+f+'\',this.value,\''+ym+'\')"></td>';
   const body = cities.map(c=>{
     const open = STG.open["t:"+c] !== false, list = byCity[c].slice().sort((a,b)=>a.name.localeCompare(b.name,"ru"));
     return '<div style="border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">'+
       '<div style="display:flex;gap:8px;align-items:center;padding:8px 10px;background:#F2F6FA"><button class="btn" style="padding:2px 9px" data-k="t:'+esc(c)+'" onclick="STG.open[this.dataset.k]=STG.open[this.dataset.k]===false;stgRerender()">'+(open?'▾':'▸')+'</button>'+
       '<input class="sx-name" style="font-weight:700;max-width:260px" value="'+esc(c)+'" title="Название города (изменится у всех его терминалов)" onchange="stgCityRename(this.defaultValue,this.value)">'+
       '<span class="muted" style="font-size:12px">терминалов: '+list.length+'</span><span style="flex:1"></span><button class="btn" data-c="'+esc(c)+'" onclick="stgAddTerm(this.dataset.c)">+ Терминал</button></div>'+
-      (open ? '<div style="overflow-x:auto"><table style="margin:0"><thead><tr><th rowspan="2">Терминал</th><th colspan="4" style="text-align:center;border-bottom:1px solid var(--border)">20\'</th><th colspan="4" style="text-align:center;border-bottom:1px solid var(--border)">40\'</th><th rowspan="2">Ставки</th><th rowspan="2"></th></tr>'+
+      (open ? '<div style="overflow-x:auto"><table style="margin:0"><thead><tr><th rowspan="2">Терминал</th><th colspan="4" style="text-align:center;border-bottom:1px solid var(--border)">20\'</th><th colspan="4" style="text-align:center;border-bottom:1px solid var(--border)">40\'</th><th rowspan="2"></th></tr>'+
         '<tr><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th><th style="text-align:right" title="1 раз за контейнер в месяц">Мониторинг, ₽/мес</th><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th><th style="text-align:right" title="1 раз за контейнер в месяц">Мониторинг, ₽/мес</th></tr></thead><tbody>'+
-        list.map(t=>'<tr><td><input class="sx-name" value="'+esc(t.name)+'" onchange="stgTermSet(\''+t.id+'\',\'name\',\'\',this.value)"></td>'+inp(t,"t20","prr")+inp(t,"t20","rate")+inp(t,"t20","free")+inp(t,"t20","mon")+inp(t,"t40","prr")+inp(t,"t40","rate")+inp(t,"t40","free")+inp(t,"t40","mon")+'<td style="font-size:12px;white-space:nowrap">'+stgVerCell(t)+'</td><td><button class="sx-x" title="Удалить терминал" onclick="stgDelTerm(\''+t.id+'\')">✕</button></td></tr>').join("")+'</tbody></table></div>' : '')+'</div>';
+        list.map(t=>'<tr><td><input class="sx-name" value="'+esc(t.name)+'" onchange="stgTermSet(\''+t.id+'\',\'name\',\'\',this.value)"></td>'+inp(t,"t20","prr")+inp(t,"t20","rate")+inp(t,"t20","free")+inp(t,"t20","mon")+inp(t,"t40","prr")+inp(t,"t40","rate")+inp(t,"t40","free")+inp(t,"t40","mon")+'<td><button class="sx-x" title="Удалить терминал" onclick="stgDelTerm(\''+t.id+'\')">✕</button></td></tr>').join("")+'</tbody></table></div>' : '')+'</div>';
   }).join("");
-  return '<div class="panel"><p class="panel-title">Терминалы и тарифы</p>'+
-    expl('города и терминалы в них, у каждого свои ставки для 20\' и 40\'.','ПРР — стоимость одной крановой операции. Хранение — цена за сутки после бесплатных дней. Мониторинг — фиксированная сумма за контейнер: берётся один раз за контейнер в месяц, сколько бы он ни стоял. Бесплатные дни считаются один раз от даты заезда контейнера. Ставки меняются со временем: откройте нужный месяц сверху и нажмите «Новые с …» — новые ставки начнут действовать с этого месяца, а прежние останутся для прошлых месяцев (их видно в колонке «Ставки»). Цифры в таблице — это ставки, действующие в выбранном месяце; исправить их можно прямо тут.')+
-    (cities.length ? body : '<p class="muted">Терминалов пока нет. Добавьте город и терминал или загрузите файл: неизвестные терминалы добавятся сами с нулевыми тарифами.</p>')+
-    '<div class="sx-act"><button class="btn btn-primary" onclick="stgAddCity()">+ Город</button></div></div>';
+  return cities.length ? body : '<p class="muted">Терминалов пока нет. Добавьте город и терминал или загрузите файл: неизвестные терминалы добавятся сами с нулевыми тарифами.</p>';
+}
+function stgNextYm(ym){ const y = +ym.slice(0,4), m = +ym.slice(5,7); return m===12 ? (y+1)+"-01" : y+"-"+String(m+1).padStart(2,"0"); }
+function stgTermMonths(){
+  const set = {}; STG.months.forEach(m=>{ set[m.month] = 1; }); if (STG.today) set[STG.today.slice(0,7)] = 1; if (STG.ym) set[STG.ym] = 1;
+  STG.cfg.terminals.forEach(t=>(t.tariffs||[]).forEach(v=>{ if (v.from>"2000-01") set[v.from] = 1; }));
+  (STG.extraM||[]).forEach(m=>{ set[m] = 1; });
+  return Object.keys(set).sort().reverse();
+}
+function stgTermsSummary(ym){
+  const list = STG.cfg.terminals.filter(t=>!t.archived); if (!list.length) return "";
+  return list.map(t=>{ const v = stgVer(t,ym); return esc(t.name)+': '+stgMoney(v.t20.rate)+' / '+stgMoney(v.t40.rate); }).join(' · ');
+}
+function stgTariffsHtml(){
+  const months = stgTermMonths(), hasM = {}; STG.months.forEach(m=>{ hasM[m.month] = 1; });
+  const rows = months.map(ym=>{
+    const open = STG.open["tm:"+ym] === true;
+    return '<div style="border:1px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden">'+
+      '<div class="sx-row" data-k="tm:'+ym+'" onclick="stgToggle(this.dataset.k)" style="display:flex;gap:10px;align-items:center;padding:9px 12px;background:#F2F6FA;cursor:pointer"><b>'+(open?'▾ ':'▸ ')+stgMonthLabel(ym)+'</b>'+
+      (hasM[ym]?'<span class="muted" style="font-size:12px">есть данные</span>':'<span class="muted" style="font-size:12px">данных нет</span>')+
+      (open?'':'<span class="muted" style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">хранение 20\' / 40\': '+stgTermsSummary(ym)+'</span>')+'</div>'+
+      (open ? '<div style="padding:10px">'+stgTariffsBody(ym)+'<div class="sx-act"><button class="btn" title="Убрать отдельные ставки следующих месяцев: они станут такими же, как в '+esc(stgMonthLabel(ym).toLowerCase())+'" onclick="stgPropagate(\''+ym+'\')">Применить ко всем следующим месяцам</button><span class="muted" style="font-size:12px">Правка действует только на этот месяц. Остальные месяцы не меняются.</span></div></div>' : '')+'</div>';
+  }).join("");
+  return '<div class="panel"><p class="panel-title">Ставки по месяцам</p>'+
+    expl('ставки терминалов по месяцам: раскройте месяц и измените цифры, как в архиве.','ПРР — стоимость одной крановой операции. Хранение — цена за сутки после бесплатных дней, бесплатные дни считаются один раз от даты заезда. Мониторинг — фиксированная сумма за контейнер: берётся один раз за контейнер в месяц. Правка ставок в месяце меняет расчёт только этого месяца и сразу пересчитывает его и дашборды; остальные месяцы остаются со своими ставками. Чтобы задать ставки на месяц, которого нет в списке, выберите его ниже. Города и терминалы добавляются кнопками внизу, название терминала и города правится прямо в таблице.')+
+    '<div class="sx-act"><label class="auth-l" style="margin:0">Открыть другой месяц</label><input class="fld fld-sm" style="width:auto" type="month" onchange="if(/^\\d{4}-\\d{2}$/.test(this.value)){STG.extraM=(STG.extraM||[]).concat(this.value);STG.open[\'tm:\'+this.value]=true;stgRerender()}"></div>'+
+    rows+'<div class="sx-act"><button class="btn btn-primary" onclick="stgAddCity()">+ Город</button></div></div>';
+}
+function stgPropagate(ym){
+  if (!confirm("Сделать ставки следующих месяцев такими же, как в "+stgMonthLabel(ym).toLowerCase()+"? Отдельные ставки более поздних месяцев будут убраны.")) return;
+  STG.cfg.terminals.forEach(t=>{ const cur = stgVer(t,ym); t.tariffs = t.tariffs.filter(v=>v.from<=ym); if (!t.tariffs.some(v=>v.from===cur.from)) t.tariffs.push(cur); t.tariffs.sort((a,b)=>a.from.localeCompare(b.from)); });
+  stgCfgSave();
 }
 
 // ---------- расчёт ----------

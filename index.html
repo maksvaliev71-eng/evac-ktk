@@ -4493,7 +4493,7 @@ function stgCityRename(old, v){
 }
 function stgDelTerm(id){
   const t = STG.cfg.terminals.find(x=>x.id===id); if (!t) return;
-  if (!confirm("Убрать терминал «"+t.name+"» из списка? Загруженные месяцы и история тарифов останутся.")) return;
+  if (!confirm("Убрать терминал «"+t.name+"» из списка? Для смены ставок удалять не нужно: просто измените цифры в нужном месяце. Если позже добавите терминал с таким же названием, он заменит этот в расчётах.")) return;
   t.archived = true; stgCfgSave();
 }
 function stgTariffsBody(ym){

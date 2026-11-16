@@ -381,10 +381,17 @@ function stTermFor(mf, id, tm) {
 // • Сутки заезда и выезда считаются оба; без выезда — по «сегодня» (но не дальше конца месяца).
 // • Бесплатные дни — один раз от даты заезда (в т.ч. заезд в прошлом месяце).
 // • Крановые операции: 1 за заезд в этом месяце + 1 за выезд в этом месяце (0–2).
+// удалённый (скрытый) терминал, вместо которого заведён новый с тем же названием, считается как новый:
+// старые строки месяцев сами переходят на актуальный терминал и его ставки
+function stAlias() {
+  const al = {}; for (const t of stCfg.terminals) if (t.archived) { const a = stCfg.terminals.find(x => !x.archived && stNorm(x.name) === stNorm(t.name)); if (a) al[t.id] = a.id; } return al;
+}
 function stCalc(mf, today, opts) {
+  const al = stAlias();
   const tm = (opts && opts.tmonth) || mf.month, [ms, me_] = stMonthRange(mf.month), td = stDay(today), asOf = Math.min(td === null ? me_ : td, me_);
   const tc = {}, out = [], by = {}, terms = {}, monSeen = new Set(), tot = { cnt20: 0, cnt40: 0, days: 0, paid: 0, st: 0, ops: 0, prr: 0, mon: 0, tot: 0, open: 0 };
-  for (const r of mf.rows || []) {
+  for (const r0 of mf.rows || []) {
+    const r = Object.assign({}, r0, { t: al[r0.t] || r0.t });
     const tmx = tc[r.t] !== undefined ? tc[r.t] : (tc[r.t] = stTermFor(mf, r.t, tm)); if (!tmx) continue;
     terms[r.t] = tmx;
     const tf = r.s === 40 ? tmx.t40 : tmx.t20, inD = stDay(r.i), outD = r.o ? stDay(r.o) : null; if (inD === null) continue;
@@ -422,8 +429,8 @@ function stNorm(s) { return String(s || "").trim().toLowerCase().replace(/\s+/g,
 // контроль между месяцами: контейнеры, стоявшие на терминале в конце прошлого месяца, но отсутствующие в файле этого месяца
 function stContinuity(ym, mf) {
   const pym = stPrevYm(ym), pf = readJson(stMF(pym), null); if (!pf) return null;
-  const [, pe] = stMonthRange(pym), cur = new Set((mf.rows || []).map(r => r.t + "|" + r.c)), list = [];
-  for (const r of pf.rows || []) { const od = r.o ? stDay(r.o) : null; if ((od === null || od > pe) && !cur.has(r.t + "|" + r.c)) { const t = stTermFor(pf, r.t, pym); list.push({ t: t ? t.name : "?", c: r.c, s: r.s, i: r.i }); } }
+  const [, pe] = stMonthRange(pym), al = stAlias(), cur = new Set((mf.rows || []).map(r => (al[r.t] || r.t) + "|" + r.c)), list = [];
+  for (const r of pf.rows || []) { const od = r.o ? stDay(r.o) : null; if ((od === null || od > pe) && !cur.has((al[r.t] || r.t) + "|" + r.c)) { const t = stTermFor(pf, r.t, pym); list.push({ t: t ? t.name : "?", c: r.c, s: r.s, i: r.i }); } }
   return { prev: pym, count: list.length, list: list.slice(0, 100) };
 }
 
@@ -637,7 +644,7 @@ const server = http.createServer(async (req, res) => {
           const b = await readBody(req, 40000000); if (!Array.isArray(b.rows)) return send(res, 400, { error: "Нет строк" });
           const [ms, me_] = stMonthRange(ym), errors = [], created = [], rows = [], seen = new Set(); let skipped = 0, outside = 0, dups = 0;
           const find = (name, city) => {
-            const n = stNorm(name), c = stNorm(city); const same = stCfg.terminals.filter(t => stNorm(t.name) === n);
+            const n = stNorm(name), c = stNorm(city); const same0 = stCfg.terminals.filter(t => stNorm(t.name) === n), same = same0.some(t => !t.archived) ? same0.filter(t => !t.archived) : same0;
             if (same.length === 1) return same[0]; if (same.length > 1 && c) return same.find(t => stNorm(t.city) === c) || null; return same.length ? same[0] : null;
           };
           for (let k = 0; k < b.rows.length; k++) {

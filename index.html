@@ -4523,7 +4523,42 @@ function stgTermsSummary(ym){
   const list = STG.cfg.terminals.filter(t=>!t.archived); if (!list.length) return "";
   return list.map(t=>{ const v = stgVer(t,ym); return esc(t.name)+': '+stgMoney(v.t20.rate)+' / '+stgMoney(v.t40.rate); }).join(' · ');
 }
+function stgPanelHead(key, title, hint){ const open = !!STG.open[key];
+  return '<div class="sx-row" data-k="'+key+'" onclick="stgToggle(this.dataset.k)" style="display:flex;align-items:center;gap:10px;cursor:pointer;flex-wrap:wrap"><p class="panel-title" style="margin:0">'+(open?'▾ ':'▸ ')+title+'</p><span class="muted" style="font-size:12px">'+hint+'</span></div>'; }
+// пакетная установка ставок на период
+STG.bt = STG.bt || { tid:"all", from:"", to:"", v:{ t20:{prr:"",rate:"",free:"",mon:""}, t40:{prr:"",rate:"",free:"",mon:""} } };
+function stgBtSet(sz, f, v){ STG.bt.v[sz][f] = v; }
+function stgBtFill(){ const b = STG.bt, t = b.tid==="all" ? STG.cfg.terminals.find(x=>!x.archived) : STG.cfg.terminals.find(x=>x.id===b.tid); if (!t || !/^\d{4}-\d{2}$/.test(b.from)) return; const v = stgVer(t, b.from);
+  ["t20","t40"].forEach(sz=>["prr","rate","free","mon"].forEach(f=>{ b.v[sz][f] = String((v[sz]&&v[sz][f])||0).replace(".",","); })); }
+function stgBtApply(){
+  const b = STG.bt, ok = x=>/^\d{4}-\d{2}$/.test(x); if (!ok(b.from) || !ok(b.to) || b.to<b.from) { mainToast("Укажите период: месяц «с» и месяц «по»"); return; }
+  const list = STG.cfg.terminals.filter(t=>!t.archived && (b.tid==="all" || t.id===b.tid)); if (!list.length) return;
+  const empty = ["t20","t40"].some(sz=>["prr","rate","free","mon"].some(f=>String(b.v[sz][f]).trim()===""));
+  if (empty && !confirm("Часть полей пустая — они будут считаться как 0. Продолжить?")) return;
+  if (!confirm("Задать эти ставки для "+(b.tid==="all"?"всех терминалов ("+list.length+")":list[0].name)+" на период "+stgMonthLabel(b.from).toLowerCase()+" — "+stgMonthLabel(b.to).toLowerCase()+"?")) return;
+  const nx = stgNextYm(b.to), mk = sz=>({ prr:stgN(b.v[sz].prr), rate:stgN(b.v[sz].rate), free:Math.round(stgN(b.v[sz].free)), mon:stgN(b.v[sz].mon) });
+  list.forEach(t=>{
+    t.tariffs = t.tariffs && t.tariffs.length ? t.tariffs : [{from:"2000-01",t20:stgZero(),t40:stgZero()}];
+    const after = JSON.parse(JSON.stringify(stgVer(t, nx)));
+    t.tariffs = t.tariffs.filter(v=>!(v.from>=b.from && v.from<=b.to));
+    if (!t.tariffs.some(v=>v.from===nx)) t.tariffs.push({ from:nx, t20:after.t20, t40:after.t40 });
+    t.tariffs.push({ from:b.from, t20:mk("t20"), t40:mk("t40") }); t.tariffs.sort((x,y)=>x.from.localeCompare(y.from));
+  });
+  mainToast("Ставки заданы на период"); stgCfgSave();
+}
+function stgBtHtml(){
+  const b = STG.bt, terms = STG.cfg.terminals.filter(t=>!t.archived), inp = (sz,f)=>'<input class="fld fld-sm" style="width:92px" type="text" inputmode="decimal" value="'+esc(b.v[sz][f])+'" oninput="stgBtSet(\''+sz+'\',\''+f+'\',this.value)">';
+  if (!terms.length) return "";
+  return '<div style="border:1px dashed var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:#FAFCFE"><b style="font-size:13px">Задать ставки сразу на период</b> <span class="muted" style="font-size:12px">например, на весь прошлый год</span>'+
+    '<div class="sx-act" style="margin-top:8px"><select class="fld fld-sm" style="width:auto" onchange="STG.bt.tid=this.value;stgBtFill();stgRerender()"><option value="all"'+(b.tid==="all"?' selected':'')+'>Все терминалы</option>'+terms.map(t=>'<option value="'+t.id+'"'+(b.tid===t.id?' selected':'')+'>'+esc(t.city+" — "+t.name)+'</option>').join("")+'</select>'+
+    '<label class="auth-l" style="margin:0">с</label><input class="fld fld-sm" style="width:auto" type="month" value="'+esc(b.from)+'" onchange="STG.bt.from=this.value;stgBtFill();stgRerender()">'+
+    '<label class="auth-l" style="margin:0">по</label><input class="fld fld-sm" style="width:auto" type="month" value="'+esc(b.to)+'" onchange="STG.bt.to=this.value"></div>'+
+    '<div style="overflow-x:auto"><table style="font-size:12px"><thead><tr><th></th><th>ПРР, ₽</th><th>Хранение, ₽/сут</th><th>Беспл. дней</th><th>Мониторинг, ₽</th></tr></thead><tbody>'+
+    ['t20','t40'].map(sz=>'<tr><td><b>'+(sz==="t20"?"20\'":"40\'")+'</b></td>'+['prr','rate','free','mon'].map(f=>'<td>'+inp(sz,f)+'</td>').join("")+'</tr>').join("")+'</tbody></table></div>'+
+    '<div class="sx-act"><button class="btn btn-primary" onclick="stgBtApply()">Применить к периоду</button><span class="muted" style="font-size:12px">Месяцы после периода останутся со своими ставками. Любой месяц потом можно поправить отдельно.</span></div></div>';
+}
 function stgTariffsHtml(){
+  if (!STG.open["pan:rates"]) return '<div class="panel">'+stgPanelHead("pan:rates","Ставки по месяцам","тарифы терминалов, можно задать сразу на период — нажмите, чтобы открыть")+'</div>';
   const months = stgTermMonths(), hasM = {}; STG.months.forEach(m=>{ hasM[m.month] = 1; });
   const rows = months.map(ym=>{
     const open = STG.open["tm:"+ym] === true;
@@ -4533,9 +4568,9 @@ function stgTariffsHtml(){
       (open?'':'<span class="muted" style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">хранение 20\' / 40\': '+stgTermsSummary(ym)+'</span>')+'</div>'+
       (open ? '<div style="padding:10px">'+stgTariffsBody(ym)+'<div class="sx-act"><button class="btn" title="Убрать отдельные ставки следующих месяцев: они станут такими же, как в '+esc(stgMonthLabel(ym).toLowerCase())+'" onclick="stgPropagate(\''+ym+'\')">Применить ко всем следующим месяцам</button><span class="muted" style="font-size:12px">Правка действует только на этот месяц. Остальные месяцы не меняются.</span></div></div>' : '')+'</div>';
   }).join("");
-  return '<div class="panel"><p class="panel-title">Ставки по месяцам</p>'+
+  return '<div class="panel">'+stgPanelHead("pan:rates","Ставки по месяцам","")+
     expl('ставки терминалов по месяцам: раскройте месяц и измените цифры, как в архиве.','ПРР — стоимость одной крановой операции. Хранение — цена за сутки после бесплатных дней, бесплатные дни считаются один раз от даты заезда. Мониторинг — фиксированная сумма за каждое пребывание контейнера на терминале в месяце (как в счёте терминала: если контейнер заезжал два раза, мониторинг берётся дважды). Правка ставок в месяце меняет расчёт только этого месяца и сразу пересчитывает его и дашборды; остальные месяцы остаются со своими ставками. Чтобы задать ставки на месяц, которого нет в списке, выберите его ниже. Города и терминалы добавляются кнопками внизу, название терминала и города правится прямо в таблице.')+
-    '<div class="sx-act"><label class="auth-l" style="margin:0">Открыть другой месяц</label><input class="fld fld-sm" style="width:auto" type="month" onchange="if(/^\\d{4}-\\d{2}$/.test(this.value)){STG.extraM=(STG.extraM||[]).concat(this.value);STG.open[\'tm:\'+this.value]=true;stgRerender()}"></div>'+
+    stgBtHtml()+'<div class="sx-act"><label class="auth-l" style="margin:0">Открыть другой месяц</label><input class="fld fld-sm" style="width:auto" type="month" onchange="if(/^\\d{4}-\\d{2}$/.test(this.value)){STG.extraM=(STG.extraM||[]).concat(this.value);STG.open[\'tm:\'+this.value]=true;stgRerender()}"></div>'+
     rows+'<div class="sx-act"><button class="btn btn-primary" onclick="stgAddCity()">+ Город</button></div></div>';
 }
 function stgPropagate(ym){
@@ -4715,12 +4750,36 @@ async function stgUpload(){
   catch(e){ STG.upRes = { error:e.message, errors:((e.data&&e.data.errors)||[]) }; }
   STG.busy = false; await stgReload(true);
 }
+// ---------- загрузка файла за период: строки сами раскладываются по месяцам ----------
+function stgSplitMonths(rows){
+  const cur = (STG.today||"").slice(0,7), ym = d => d.slice(0,7), ends = m => { const y = +m.slice(0,4), mm = +m.slice(5,7); return m+"-"+String(new Date(Date.UTC(y,mm,0)).getUTCDate()).padStart(2,"0"); };
+  const ok = rows.filter(r=>r.inD); if (!ok.length) return [];
+  let a = ok.reduce((x,r)=>r.inD<x?r.inD:x, ok[0].inD).slice(0,7), b = ok.reduce((x,r)=>{ const e = r.outD&&r.outD>r.inD ? r.outD : r.inD; return e>x?e:x; }, ok[0].inD).slice(0,7);
+  if (cur && b>cur) b = cur; if (a>b) b = a;
+  const out = []; for (let m=a; m<=b; m=stgNextYm(m)) { const ms = m+"-01", me = ends(m), list = ok.filter(r=>r.inD<=me && (!r.outD || r.outD>=ms)); if (list.length) out.push({ month:m, rows:list }); }
+  return out;
+}
+async function stgUploadAuto(){
+  const u = STG.upl; if (!u || !u.rows) return; const parts = stgSplitMonths(u.rows); if (!parts.length) return;
+  const have = parts.filter(p=>STG.months.some(m=>m.month===p.month)).map(p=>stgMonthLabel(p.month));
+  if (!confirm("Загрузить "+parts.length+" мес. ("+stgMonthLabel(parts[0].month)+" — "+stgMonthLabel(parts[parts.length-1].month)+") из файла «"+u.name+"»?"+(have.length?"\n\nДанные этих месяцев будут заменены: "+have.join(", ")+".":""))) return;
+  STG.busy = true; STG.upRes = null; const done = [], created = new Set(); let err = "";
+  for (const p of parts) {
+    try { const r = await api("PUT","/api/storage/month/"+p.month,{ rows:p.rows }); done.push({ month:p.month, accepted:r.accepted, skipped:r.skipped, dups:r.dups, noTariff:r.noTariff }); (r.created||[]).forEach(x=>created.add(x)); mainToast("Загружено: "+stgMonthLabel(p.month)+" ("+done.length+" из "+parts.length+")"); }
+    catch(e){ err = stgMonthLabel(p.month)+": "+(e.message||"ошибка"); break; }
+  }
+  STG.upl = err ? STG.upl : null; STG.upRes = { auto:done, created:[...created], error:err||"" };
+  if (done.length) STG.ym = done[done.length-1].month;
+  STG.busy = false; await stgReload(true);
+}
 function stgUploadHtml(){
   const label = stgMonthLabel(STG.ym), u = STG.upl, r = STG.upRes; let out = "";
   if (u && u.error) out += '<div class="adm-warn"><b>'+esc(u.name)+':</b> '+esc(u.error)+'</div>';
   if (u && u.rows) out += '<div class="adm-warn" style="background:#EEF6FF;border-color:#B7D3EE"><b>'+esc(u.name)+'</b>: найдено строк — '+stgInt(u.rows.length)+'. Распознано: '+esc(u.map.join("; "))+'.'+(u.loaded?' <b>Груженых пропущено: '+stgInt(u.loaded)+'</b> (считаются только порожние).':'')+(u.xfer?' Передач внутри терминала: <b>'+stgInt(u.xfer)+'</b> (ПРР за выдачу по ним не берётся).':'')+(u.back?' Заездов сразу после передачи пропущено: <b>'+stgInt(u.back)+'</b> (вторая сторона передачи, терминал её не считает).':'')+(u.noLoad?' Колонки «Груз» нет — считаются все контейнеры.':'')+(u.noOut?' Колонки «Дата выезда» нет: все контейнеры считаются стоящими на терминале.':'')+
-    '<div class="sx-act"><button class="btn btn-primary" onclick="stgUpload()">Загрузить в «'+esc(label)+'»</button><button class="btn" onclick="STG.upl=null;stgRerender()">Отмена</button>'+(STG.res?'<span class="muted" style="font-size:12px">Данные этого месяца будут заменены.</span>':'')+'</div></div>';
-  if (r && r.error) out += '<div class="adm-warn"><b class="sx-bad">Не загружено:</b> '+esc(r.error)+(r.errors&&r.errors.length?'<br>'+r.errors.map(esc).join('<br>'):'')+'</div>';
+    '<div class="sx-act"><button class="btn btn-primary" onclick="stgUpload()">Загрузить в «'+esc(label)+'»</button><button class="btn btn-primary" title="Каждая строка попадёт во все месяцы, в которых контейнер стоял на терминале" onclick="stgUploadAuto()">Распределить по месяцам автоматически ('+stgSplitMonths(u.rows).length+' мес.)</button><button class="btn" onclick="STG.upl=null;stgRerender()">Отмена</button>'+(STG.res?'<span class="muted" style="font-size:12px">Данные этого месяца будут заменены.</span>':'')+'</div></div>';
+  if (r && r.auto) out += '<div class="adm-warn" style="background:#EDF9F0;border-color:#A9DDB8"><b class="sx-ok">Загружено месяцев: '+r.auto.length+'.</b>'+(r.created&&r.created.length?'<br>Добавлены новые терминалы: <b>'+r.created.map(esc).join(', ')+'</b>. Укажите город и тарифы в блоке «Ставки по месяцам».':'')+
+    '<div style="font-size:12px;margin-top:4px">'+r.auto.map(x=>stgMonthLabel(x.month)+': '+stgInt(x.accepted)+' строк'+(x.dups?', дублей убрано '+x.dups:'')+((x.noTariff&&x.noTariff.length)?', <span class="sx-bad">нет тарифов</span>':'')).join('<br>')+'</div>'+(r.error?'<br><b class="sx-bad">Остановилось на: '+esc(r.error)+'</b>':'')+'</div>';
+  if (r && r.error && !r.auto) out += '<div class="adm-warn"><b class="sx-bad">Не загружено:</b> '+esc(r.error)+(r.errors&&r.errors.length?'<br>'+r.errors.map(esc).join('<br>'):'')+'</div>';
   if (r && r.ok) out += '<div class="adm-warn" style="background:#EDF9F0;border-color:#A9DDB8"><b class="sx-ok">Загружено: '+stgInt(r.accepted)+' строк.</b>'+
     (r.outside?' Вне месяца пропущено: '+stgInt(r.outside)+'.':'')+(r.skipped?' С ошибками пропущено: '+stgInt(r.skipped)+'.':'')+(r.dups?' Полных дублей строк убрано: '+stgInt(r.dups)+'.':'')+
     (r.created&&r.created.length?'<br>Добавлены новые терминалы: <b>'+r.created.map(esc).join(', ')+'</b>. Города у них нет в файле — укажите город и тарифы в блоке «Терминалы и тарифы» ниже, расчёт обновится сам.':'')+
@@ -4818,6 +4877,7 @@ function stgDelta(cur, prev, cost){
 }
 function stgAnalyticsHtml(){
   const an = STG.an; if (!an || !an.months || !an.months.length) return "";
+  if (!STG.open["pan:dyn"]) return '<div class="panel">'+stgPanelHead("pan:dyn","Динамика по месяцам","суммы по городам и терминалам, ставки по месяцам, что повлияло — нажмите, чтобы открыть")+'</div>';
   const mk = STG.anMet||"tot", [lbl,fn,cost] = STG_MET[mk], ms = an.months.slice(-12), money = mk==="tot"||mk==="st"||mk==="prr";
   const fmt = v => money ? stgMoney(v) : stgInt(v);
   const cityOf = id => (an.terms[id]||{c:"Без города"}).c, nameOf = id => (an.terms[id]||{n:"?"}).n;
@@ -4853,7 +4913,7 @@ function stgAnalyticsHtml(){
   const infl = ms.map((m,i)=>{ if (i===0) return ""; const d = (m.tot&&m.tot.tot||0)-(ms[i-1].tot&&ms[i-1].tot.tot||0), fx = Object.values((an.fx&&an.fx[m.month])||{}).reduce((a,b)=>a+b,0), vol = d-fx;
     const cc = v=>'<td class="num-cell" style="color:'+(v>0?'var(--danger)':v<0?'var(--ok)':'inherit')+'">'+(v>0?'+':'')+stgMoney(v)+'</td>';
     return '<tr><td>'+stgMonthLabel(m.month)+(m.partial?'*':'')+'</td><td class="num-cell">'+stgMoney(m.tot.tot)+'</td>'+cc(d)+cc(fx)+cc(vol)+'</tr>'; }).join("");
-  return '<div class="panel"><p class="panel-title">Динамика по месяцам</p>'+
+  return '<div class="panel">'+stgPanelHead("pan:dyn","Динамика по месяцам","")+
     '<p class="panel-sub">Как меняются суммы от месяца к месяцу по городам и терминалам. Нажмите на город, чтобы увидеть его терминалы. Под цифрой — изменение к прошлому месяцу. * — месяц ещё не закончен (контейнеры без выезда посчитаны до сегодня), сравнивать его с полными месяцами нужно с осторожностью.</p>'+
     '<div class="sx-act"><label class="auth-l" style="margin:0">Показатель</label><select class="fld fld-sm" style="width:auto" onchange="STG.anMet=this.value;stgRerender()">'+Object.keys(STG_MET).map(k=>'<option value="'+k+'"'+(k===mk?' selected':'')+'>'+STG_MET[k][0]+'</option>').join("")+'</select></div>'+
     chart+'<div style="overflow-x:auto"><table><thead><tr>'+head+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+
@@ -4878,7 +4938,7 @@ function renderStorageTab(){
     '<div class="sx-act"><label class="auth-l" style="margin:0">Месяц</label><input class="fld fld-sm" style="width:auto" type="month" value="'+esc(STG.ym)+'" onchange="stgSetMonth(this.value)">'+
     '<input type="file" id="stgFile" accept=".xlsx,.csv,.txt" style="display:none" onchange="stgPick(this)"><button class="btn btn-primary" onclick="document.getElementById(\'stgFile\').click()">Загрузить файл</button><button class="btn" onclick="stgTemplate()">Шаблон файла</button></div>'+
     stgUploadHtml()+'</div>';
-  return head + stgContHtml() + stgResultHtml() + stgDashHtml() + stgAnalyticsHtml() + stgDetailHtml() + stgTariffsHtml() + stgCalcHtml() + stgMonthsHtml();
+  return head + stgContHtml() + stgResultHtml() + stgDashHtml() + stgAnalyticsHtml() + stgDetailHtml() + stgTariffsHtml() + stgMonthsHtml();
 }
 
 render();

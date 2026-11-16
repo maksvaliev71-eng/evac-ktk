@@ -665,11 +665,14 @@ const server = http.createServer(async (req, res) => {
           }
           if (!rows.length) return send(res, 400, { error: "Ни одной подходящей строки", errors, outside });
           if (created.length) { stWrite(ST_CFG_F, stCfg); }
-          const mf = { month: ym, uploadedAt: Date.now(), by: me.name, terms: stSnapTerms(ym), rows }, result = stCalc(mf, mskToday());
+          // файл заменяет данные только тех терминалов, которые в нём есть; остальные терминалы месяца (другие города) сохраняются
+          const old = readJson(f, null), al = stAlias(), newIds = new Set(rows.map(r => al[r.t] || r.t));
+          const keptRows = old && Array.isArray(old.rows) ? old.rows.filter(r => !newIds.has(al[r.t] || r.t)) : [], replacedN = old && Array.isArray(old.rows) ? old.rows.length - keptRows.length : 0;
+          const mf = { month: ym, uploadedAt: Date.now(), by: me.name, terms: stSnapTerms(ym), rows: keptRows.concat(rows) }, result = stCalc(mf, mskToday());
           stWrite(f, mf); stIdx[ym] = stIndexEntry(mf, result); try { writeJson(ST_IDX_F, stIdx); } catch (e) {}
           const noTariff = Object.keys(result.byTerm).filter(id => { const t = result.terms[id]; return t && !t.t20.rate && !t.t40.rate && !t.t20.prr && !t.t40.prr && !t.t20.mon && !t.t40.mon; }).map(id => result.terms[id].name);
-          addLogText(me, "Хранение: загрузил(а) данные за " + ym + " (" + rows.length + " строк)"); broadcast("storage", {});
-          return send(res, 200, { ok: true, accepted: rows.length, skipped, outside, dups, errors, created, noTariff });
+          addLogText(me, "Хранение: загрузил(а) данные за " + ym + " (" + rows.length + " строк, сохранено чужих терминалов: " + keptRows.length + ")"); broadcast("storage", {});
+          return send(res, 200, { ok: true, accepted: rows.length, skipped, outside, dups, errors, created, noTariff, kept: keptRows.length, replaced: replacedN });
         }
       }
       return send(res, 404, { error: "Не найдено" });

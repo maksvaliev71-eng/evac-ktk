@@ -4507,7 +4507,7 @@ function stgTariffsBody(ym){
       '<input class="sx-name" style="font-weight:700;max-width:260px" value="'+esc(c)+'" title="Название города (изменится у всех его терминалов)" onchange="stgCityRename(this.defaultValue,this.value)">'+
       '<span class="muted" style="font-size:12px">терминалов: '+list.length+'</span><span style="flex:1"></span><button class="btn" data-c="'+esc(c)+'" onclick="stgAddTerm(this.dataset.c)">+ Терминал</button></div>'+
       (open ? '<div style="overflow-x:auto"><table style="margin:0"><thead><tr><th rowspan="2">Терминал</th><th colspan="4" style="text-align:center;border-bottom:1px solid var(--border)">20\'</th><th colspan="4" style="text-align:center;border-bottom:1px solid var(--border)">40\'</th><th rowspan="2"></th></tr>'+
-        '<tr><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th><th style="text-align:right" title="1 раз за контейнер в месяц">Мониторинг, ₽/мес</th><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th><th style="text-align:right" title="1 раз за контейнер в месяц">Мониторинг, ₽/мес</th></tr></thead><tbody>'+
+        '<tr><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th><th style="text-align:right" title="за каждое пребывание в месяце">Мониторинг, ₽/мес</th><th style="text-align:right">ПРР, ₽/опер.</th><th style="text-align:right">Хранение, ₽/сут</th><th style="text-align:right">Беспл. дней</th><th style="text-align:right" title="за каждое пребывание в месяце">Мониторинг, ₽/мес</th></tr></thead><tbody>'+
         list.map(t=>'<tr><td><input class="sx-name" value="'+esc(t.name)+'" onchange="stgTermSet(\''+t.id+'\',\'name\',\'\',this.value)"></td>'+inp(t,"t20","prr")+inp(t,"t20","rate")+inp(t,"t20","free")+inp(t,"t20","mon")+inp(t,"t40","prr")+inp(t,"t40","rate")+inp(t,"t40","free")+inp(t,"t40","mon")+'<td><button class="sx-x" title="Удалить терминал" onclick="stgDelTerm(\''+t.id+'\')">✕</button></td></tr>').join("")+'</tbody></table></div>' : '')+'</div>';
   }).join("");
   return cities.length ? body : '<p class="muted">Терминалов пока нет. Добавьте город и терминал или загрузите файл: неизвестные терминалы добавятся сами с нулевыми тарифами.</p>';
@@ -4534,7 +4534,7 @@ function stgTariffsHtml(){
       (open ? '<div style="padding:10px">'+stgTariffsBody(ym)+'<div class="sx-act"><button class="btn" title="Убрать отдельные ставки следующих месяцев: они станут такими же, как в '+esc(stgMonthLabel(ym).toLowerCase())+'" onclick="stgPropagate(\''+ym+'\')">Применить ко всем следующим месяцам</button><span class="muted" style="font-size:12px">Правка действует только на этот месяц. Остальные месяцы не меняются.</span></div></div>' : '')+'</div>';
   }).join("");
   return '<div class="panel"><p class="panel-title">Ставки по месяцам</p>'+
-    expl('ставки терминалов по месяцам: раскройте месяц и измените цифры, как в архиве.','ПРР — стоимость одной крановой операции. Хранение — цена за сутки после бесплатных дней, бесплатные дни считаются один раз от даты заезда. Мониторинг — фиксированная сумма за контейнер: берётся один раз за контейнер в месяц. Правка ставок в месяце меняет расчёт только этого месяца и сразу пересчитывает его и дашборды; остальные месяцы остаются со своими ставками. Чтобы задать ставки на месяц, которого нет в списке, выберите его ниже. Города и терминалы добавляются кнопками внизу, название терминала и города правится прямо в таблице.')+
+    expl('ставки терминалов по месяцам: раскройте месяц и измените цифры, как в архиве.','ПРР — стоимость одной крановой операции. Хранение — цена за сутки после бесплатных дней, бесплатные дни считаются один раз от даты заезда. Мониторинг — фиксированная сумма за каждое пребывание контейнера на терминале в месяце (как в счёте терминала: если контейнер заезжал два раза, мониторинг берётся дважды). Правка ставок в месяце меняет расчёт только этого месяца и сразу пересчитывает его и дашборды; остальные месяцы остаются со своими ставками. Чтобы задать ставки на месяц, которого нет в списке, выберите его ниже. Города и терминалы добавляются кнопками внизу, название терминала и города правится прямо в таблице.')+
     '<div class="sx-act"><label class="auth-l" style="margin:0">Открыть другой месяц</label><input class="fld fld-sm" style="width:auto" type="month" onchange="if(/^\\d{4}-\\d{2}$/.test(this.value)){STG.extraM=(STG.extraM||[]).concat(this.value);STG.open[\'tm:\'+this.value]=true;stgRerender()}"></div>'+
     rows+'<div class="sx-act"><button class="btn btn-primary" onclick="stgAddCity()">+ Город</button></div></div>';
 }
@@ -4676,25 +4676,28 @@ const STG_COLS = [
   ["in",/^(принят|дата заезда|заезд|дата приема|дата приёма|въезд)$/,/заезд|въезд|принят|поступ|прибыт/],
   ["out",/^(отправлен|дата выезда|выезд|дата отправки|вывоз)$/,/выезд|вывоз|отправлен|убыт|выход|отгруз/],
   ["city",/^(город|city)$/,/город|city/],
-  ["load",/^(груз|порожний\/груженый|наличие груза)$/,/^$a/]];
-const STG_LBL = { term:"Терминал", load:"Груз", city:"Город", ctn:"Контейнер", size:"Размер", in:"Дата заезда", out:"Дата выезда" };
+  ["load",/^(груз|порожний\/груженый|наличие груза)$/,/^$a/],
+  ["tr",/^(транспорт|вид транспорта)$/,/^$a/]];
+const STG_LBL = { term:"Терминал", load:"Груз", tr:"Транспорт", city:"Город", ctn:"Контейнер", size:"Размер", in:"Дата заезда", out:"Дата выезда" };
 function stgParse(table){
   let hi = -1, map = null, best = 0;
   for (let i=0;i<Math.min(table.length,20);i++){
     const hs = (table[i]||[]).map(h=>String(h==null?"":h).toLowerCase().replace(/ё/g,"е").replace(/\s+/g," ").trim()), m = {}, used = {};
-    for (const [k,ex] of STG_COLS) { const ci = hs.findIndex((h,c)=>h && !used[c] && ex.test(h)); if (ci>=0) { m[k] = ci; used[ci] = 1; } }
+    for (const [k,ex] of STG_COLS) { const ci = k==="tr" ? (hs.map((h,c)=>h && !used[c] && ex.test(h) ? c : -1).filter(x=>x>=0).pop() ?? -1) : hs.findIndex((h,c)=>h && !used[c] && ex.test(h)); if (ci>=0) { m[k] = ci; used[ci] = 1; } }
     for (const [k,,fz] of STG_COLS) if (m[k]===undefined) { const ci = hs.findIndex((h,c)=>h && !used[c] && fz.test(h)); if (ci>=0) { m[k] = ci; used[ci] = 1; } }
     const sc = Object.keys(m).length; if (sc>best && m.term!==undefined && m.ctn!==undefined) { best = sc; hi = i; map = m; }
   }
   if (!map) throw new Error("Не нашёл строку заголовков. Нужны колонки: Терминал, Контейнер, Размер, Принят (дата заезда), Отправлен (дата выезда)");
   const missing = ["size","in"].filter(k=>map[k]===undefined); if (missing.length) throw new Error("Не нашёл колонки: "+missing.map(k=>STG_LBL[k]).join(", "));
-  const rows = []; let loaded = 0;
+  const rows = []; let loaded = 0, xfer = 0, back = 0; const tmin = v => typeof v==="number" ? String(Math.round(v*1440)) : String(v==null?"":v).trim(), tkey = (c,v) => String(c).trim().toUpperCase()+"|"+tmin(v), xo = {};
+  for (let i=hi+1;i<table.length;i++){ const r = table[i]||[], g = k=> map[k]===undefined ? "" : r[map[k]]; if (/передач/i.test(String(g("tr"))) && g("out")!=="" ) xo[tkey(g("ctn"),g("out"))] = 1; }
   for (let i=hi+1;i<table.length;i++){ const r = table[i]||[]; const g = k=> map[k]===undefined ? "" : r[map[k]];
     if (!String(g("term")).trim() && !String(g("ctn")).trim()) continue;
     if (/груж|loaded|full/i.test(String(g("load")))) { loaded++; continue; }
-    rows.push({ line:i+1, term:String(g("term")).trim(), city:String(g("city")).trim(), ctn:String(g("ctn")).trim(), size:stgSize(g("size")), inD:stgIso(g("in")), outD:stgIso(g("out")) }); }
+    if (g("in")!=="" && xo[tkey(g("ctn"),g("in"))]) { back++; continue; } // заезд в ту же минуту, что и «Передача» этого контейнера: вторая сторона передачи, терминал её не считает
+    rows.push({ line:i+1, term:String(g("term")).trim(), city:String(g("city")).trim(), ctn:String(g("ctn")).trim(), size:stgSize(g("size")), inD:stgIso(g("in")), outD:stgIso(g("out")), xfer:/передач/i.test(String(g("tr"))) ? 1 : 0 }); if (rows[rows.length-1].xfer) xfer++; }
   if (!rows.length) throw new Error("В файле нет строк с данными");
-  return { rows, map: Object.keys(map).map(k=>STG_LBL[k]+" → колонка "+(map[k]+1)) , noOut: map.out===undefined, loaded, noLoad: map.load===undefined };
+  return { rows, map: Object.keys(map).map(k=>STG_LBL[k]+" → колонка "+(map[k]+1)) , noOut: map.out===undefined, loaded, xfer, back, noLoad: map.load===undefined };
 }
 async function stgPick(inp){
   const file = inp.files && inp.files[0]; inp.value = ""; if (!file) return; STG.upRes = null;
@@ -4702,7 +4705,7 @@ async function stgPick(inp){
     const buf = await file.arrayBuffer(); let table;
     if (/\.xlsx$/i.test(file.name) || (new Uint8Array(buf,0,2)[0]===0x50 && new Uint8Array(buf,0,2)[1]===0x4B)) table = await stgXlsx(buf);
     else { let t = new TextDecoder("utf-8").decode(buf); if (t.indexOf("�")>=0) t = new TextDecoder("windows-1251").decode(buf); table = stgCsv(t); }
-    const p = stgParse(table); STG.upl = { name:file.name, rows:p.rows, map:p.map, noOut:p.noOut, loaded:p.loaded, noLoad:p.noLoad };
+    const p = stgParse(table); STG.upl = { name:file.name, rows:p.rows, map:p.map, noOut:p.noOut, loaded:p.loaded, xfer:p.xfer, back:p.back, noLoad:p.noLoad };
   } catch(e){ STG.upl = { name:file.name, error:e.message||"Не получилось прочитать файл" }; }
   stgRerender();
 }
@@ -4715,7 +4718,7 @@ async function stgUpload(){
 function stgUploadHtml(){
   const label = stgMonthLabel(STG.ym), u = STG.upl, r = STG.upRes; let out = "";
   if (u && u.error) out += '<div class="adm-warn"><b>'+esc(u.name)+':</b> '+esc(u.error)+'</div>';
-  if (u && u.rows) out += '<div class="adm-warn" style="background:#EEF6FF;border-color:#B7D3EE"><b>'+esc(u.name)+'</b>: найдено строк — '+stgInt(u.rows.length)+'. Распознано: '+esc(u.map.join("; "))+'.'+(u.loaded?' <b>Груженых пропущено: '+stgInt(u.loaded)+'</b> (считаются только порожние).':'')+(u.noLoad?' Колонки «Груз» нет — считаются все контейнеры.':'')+(u.noOut?' Колонки «Дата выезда» нет: все контейнеры считаются стоящими на терминале.':'')+
+  if (u && u.rows) out += '<div class="adm-warn" style="background:#EEF6FF;border-color:#B7D3EE"><b>'+esc(u.name)+'</b>: найдено строк — '+stgInt(u.rows.length)+'. Распознано: '+esc(u.map.join("; "))+'.'+(u.loaded?' <b>Груженых пропущено: '+stgInt(u.loaded)+'</b> (считаются только порожние).':'')+(u.xfer?' Передач внутри терминала: <b>'+stgInt(u.xfer)+'</b> (ПРР за выдачу по ним не берётся).':'')+(u.back?' Заездов сразу после передачи пропущено: <b>'+stgInt(u.back)+'</b> (вторая сторона передачи, терминал её не считает).':'')+(u.noLoad?' Колонки «Груз» нет — считаются все контейнеры.':'')+(u.noOut?' Колонки «Дата выезда» нет: все контейнеры считаются стоящими на терминале.':'')+
     '<div class="sx-act"><button class="btn btn-primary" onclick="stgUpload()">Загрузить в «'+esc(label)+'»</button><button class="btn" onclick="STG.upl=null;stgRerender()">Отмена</button>'+(STG.res?'<span class="muted" style="font-size:12px">Данные этого месяца будут заменены.</span>':'')+'</div></div>';
   if (r && r.error) out += '<div class="adm-warn"><b class="sx-bad">Не загружено:</b> '+esc(r.error)+(r.errors&&r.errors.length?'<br>'+r.errors.map(esc).join('<br>'):'')+'</div>';
   if (r && r.ok) out += '<div class="adm-warn" style="background:#EDF9F0;border-color:#A9DDB8"><b class="sx-ok">Загружено: '+stgInt(r.accepted)+' строк.</b>'+
@@ -4871,7 +4874,7 @@ function renderStorageTab(){
   if (!STG.loaded) { if (!STG.loading) stgLoad(); return '<div class="panel"><p class="muted">Загрузка…</p></div>'; }
   if (STG.err) return '<div class="panel"><div class="adm-warn">'+esc(STG.err)+'</div><button class="btn" onclick="STG.loaded=false;STG.err=\'\';stgRerender()">Повторить</button></div>';
   const head = '<div class="panel"><p class="panel-title">Хранение контейнеров на терминалах</p>'+
-    expl('расчёт стоимости хранения и ПРР по терминалам за выбранный месяц.','Считаются только порожние контейнеры (колонка «Груз»: груженые пропускаются). Загрузите Excel за месяц (подойдёт выгрузка терминала): терминал, контейнер, размер, «Принят» (заезд), «Отправлен» (выезд). Крановые операции и платные сутки считаются сами: в каждом месяце — 1 ПРР за заезд в этом месяце и 1 за выезд в этом месяце (от 0 до 2). Сутки считаются только в пределах месяца, заезд и выезд — оба в счёт, поэтому контейнер, стоящий несколько месяцев, не считается дважды. Не выехавший — до сегодняшней даты. Бесплатные дни — один раз от даты заезда. Мониторинг — один раз за контейнер в месяц.')+
+    expl('расчёт стоимости хранения и ПРР по терминалам за выбранный месяц.','Считаются только порожние контейнеры (колонка «Груз»: груженые пропускаются). Загрузите Excel за месяц (подойдёт выгрузка терминала): терминал, контейнер, размер, «Принят» (заезд), «Отправлен» (выезд). Крановые операции и платные сутки считаются сами: в каждом месяце — 1 ПРР за заезд в этом месяце и 1 за выезд в этом месяце (от 0 до 2). Сутки считаются только в пределах месяца, заезд и выезд — оба в счёт, поэтому контейнер, стоящий несколько месяцев, не считается дважды. Не выехавший — до сегодняшней даты. Бесплатные дни — один раз от даты заезда. Мониторинг — за каждое пребывание в месяце. Если в колонке «Транспорт» стоит «Передача» (контейнер передан другой компании внутри терминала), ПРР за выдачу не берётся.')+
     '<div class="sx-act"><label class="auth-l" style="margin:0">Месяц</label><input class="fld fld-sm" style="width:auto" type="month" value="'+esc(STG.ym)+'" onchange="stgSetMonth(this.value)">'+
     '<input type="file" id="stgFile" accept=".xlsx,.csv,.txt" style="display:none" onchange="stgPick(this)"><button class="btn btn-primary" onclick="document.getElementById(\'stgFile\').click()">Загрузить файл</button><button class="btn" onclick="stgTemplate()">Шаблон файла</button></div>'+
     stgUploadHtml()+'</div>';

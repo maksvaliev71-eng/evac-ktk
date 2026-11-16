@@ -397,10 +397,11 @@ function stCalc(mf, today, opts) {
     const tf = r.s === 40 ? tmx.t40 : tmx.t20, inD = stDay(r.i), outD = r.o ? stDay(r.o) : null; if (inD === null) continue;
     const start = Math.max(inD, ms), end = Math.min(outD !== null ? outD : asOf, me_), open = outD === null;
     const days = Math.max(0, end - start + 1), paid = Math.max(0, end - Math.max(start, inD + tf.free) + 1);
-    const ops = (inD >= ms && inD <= me_ ? 1 : 0) + (outD !== null && outD >= ms && outD <= me_ ? 1 : 0);
-    // мониторинг: 1 раз за контейнер в месяц (повторный заезд того же номера в том же месяце не удваивает)
-    const mk = r.t + "|" + r.c, mon = monSeen.has(mk) ? 0 : (tf.mon || 0); monSeen.add(mk);
-    const st = stR2(paid * tf.rate), prr = stR2(ops * tf.prr), row = { t: r.t, c: r.c, s: r.s, i: r.i, o: r.o || "", n: ops, days, free: tf.free, paid, st, prr, mon, tot: stR2(st + prr + mon), open };
+    // передача другой компании внутри терминала (x=1): ПРР за выдачу не берётся
+    const ops = (inD >= ms && inD <= me_ ? 1 : 0) + (outD !== null && !r.x && outD >= ms && outD <= me_ ? 1 : 0);
+    // мониторинг: за каждое пребывание в месяце (как в счёте терминала)
+    const mk = r.t + "|" + r.c, mon = tf.mon || 0;
+    const st = stR2(paid * tf.rate), prr = stR2(ops * tf.prr), row = { t: r.t, c: r.c, s: r.s, i: r.i, o: r.o || "", x: r.x ? 1 : 0, n: ops, days, free: tf.free, paid, st, prr, mon, tot: stR2(st + prr + mon), open };
     out.push(row);
     const b = by[r.t] || (by[r.t] = { cnt20: 0, cnt40: 0, days: 0, paid: 0, st: 0, ops: 0, prr: 0, mon: 0, tot: 0, open: 0 });
     for (const o of [b, tot]) { if (r.s === 40) o.cnt40++; else o.cnt20++; o.days += days; o.paid += paid; o.st += st; o.ops += ops; o.prr += prr; o.mon += mon; o.tot += row.tot; if (open) o.open++; }
@@ -658,9 +659,9 @@ const server = http.createServer(async (req, res) => {
               let id; do { id = crypto.randomBytes(4).toString("hex"); } while (stCfg.terminals.some(t => t.id === id));
               tm = stCleanTerm({ city: r.city, name: name.slice(0, 80) }, id); stCfg.terminals.push(tm); created.push(tm.name);
             }
-            const dk = tm.id + "|" + ctn + "|" + size + "|" + r.inD + "|" + (outD !== null ? r.outD : "");
+            const dk = tm.id + "|" + ctn + "|" + size + "|" + r.inD + "|" + (outD !== null ? r.outD : "") + "|" + (r.xfer ? 1 : 0);
             if (seen.has(dk)) { dups++; continue; } seen.add(dk);
-            rows.push({ t: tm.id, c: ctn, s: size, i: String(r.inD), o: outD !== null ? String(r.outD) : "" });
+            rows.push({ t: tm.id, c: ctn, s: size, i: String(r.inD), o: outD !== null ? String(r.outD) : "", x: r.xfer ? 1 : 0 });
           }
           if (!rows.length) return send(res, 400, { error: "Ни одной подходящей строки", errors, outside });
           if (created.length) { stWrite(ST_CFG_F, stCfg); }

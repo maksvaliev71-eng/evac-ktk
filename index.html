@@ -3045,7 +3045,7 @@ function docsFromState(){
   d.trainsCfg = { capacitySelection: state.capacitySelection, capacityTeu: state.capacityTeu, planningHorizon: state.planningHorizon };
   d.forecast = { log: state.forecastLog || [], inflow: state.forecastInflow };
   { const n = state.next || {}, pl = n.plan || {}, inp = n.inputs || {}, rt = n.routes || {};
-    ["vnutriros","export","expl"].forEach(k=>{ const o = {}; LOCATIONS.forEach(l=>{ const q = (pl[l.id]||{})[k]; if (q) o[l.id] = { c20:Number(q.c20)||0, c40:Number(q.c40)||0 }; }); d["next_"+k] = o; });
+    ["vnutriros","export","expl"].forEach(k=>{ const o = {}; LOCATIONS.forEach(l=>{ const q = (pl[l.id]||{})[k]; if (q) o[l.id] = { c20:Number(q.c20)||0, c40:Number(q.c40)||0 }; }); if (k==="vnutriros" && Array.isArray(n.dom) && n.dom.length) o.__dom = clone(n.dom); d["next_"+k] = o; });
     const st = {}, nm = {}; LOCATIONS.forEach(l=>{ const r = inp[l.id]||{}; const a = {}, b = {};
       ["resource20","resource40","adj20","adj40"].forEach(k=>{ if (r[k]!==undefined) a[k] = Number(r[k])||0; }); ["norm20","norm40"].forEach(k=>{ if (r[k]!==undefined) b[k] = Number(r[k])||0; });
       if (Object.keys(a).length) st[l.id] = a; if (Object.keys(b).length) nm[l.id] = b; });
@@ -3078,7 +3078,7 @@ function applyDocs(map){
     if (anySplit) {
       const n = state.next = (state.next && typeof state.next==="object" && !Array.isArray(state.next)) ? state.next : {};
       n.plan = n.plan || {}; n.inputs = n.inputs || {};
-      ["vnutriros","export","expl"].forEach(k=>{ const m = map["next_"+k]; if (m===undefined) return; LOCATIONS.forEach(l=>{ n.plan[l.id] = n.plan[l.id]||{}; if (m[l.id]) n.plan[l.id][k] = clone(m[l.id]); else delete n.plan[l.id][k]; }); });
+      ["vnutriros","export","expl"].forEach(k=>{ const m = map["next_"+k]; if (m===undefined) return; if (k==="vnutriros") { if (Array.isArray(m.__dom)) n.dom = clone(m.__dom); else delete n.dom; } LOCATIONS.forEach(l=>{ n.plan[l.id] = n.plan[l.id]||{}; if (m[l.id]) n.plan[l.id][k] = clone(m[l.id]); else delete n.plan[l.id][k]; }); });
       if (has("next_stock")) LOCATIONS.forEach(l=>{ const r = n.inputs[l.id] = n.inputs[l.id]||{}; ["resource20","resource40","adj20","adj40"].forEach(k=>delete r[k]); Object.assign(r, clone(map.next_stock[l.id]||{})); });
       if (has("next_norm")) LOCATIONS.forEach(l=>{ const r = n.inputs[l.id] = n.inputs[l.id]||{}; ["norm20","norm40"].forEach(k=>delete r[k]); Object.assign(r, clone(map.next_norm[l.id]||{})); });
       if (has("next_routes")) n.routes = clone(map.next_routes);
@@ -4322,6 +4322,7 @@ function nextHasData(){ const n = state.next; if (!n) return false; let any=fals
   Object.values(n.inputs||{}).forEach(r=>Object.values(r||{}).forEach(v=>{ if (Number(v)) any=true; }));
   Object.values(n.plan||{}).forEach(r=>Object.values(r||{}).forEach(d=>Object.values(d||{}).forEach(v=>{ if (Number(v)) any=true; })));
   Object.values(n.routes||{}).forEach(v=>{ if (Number(v)) any=true; });
+  if (Array.isArray(n.dom) && n.dom.some(r=>r&&(Number(r.c20)||Number(r.c40)))) any=true;
   return any; }
 function nextIntVal(val, neg){ const s = String(val).replace(neg?/[^0-9-]/g:/[^0-9]/g,""); const v = Math.round(Number(s)||0); return neg ? v : Math.max(0,v); }
 function nextSet(loc, grp, a, b, val){
@@ -4331,6 +4332,22 @@ function nextSet(loc, grp, a, b, val){
   persist(); nextRefreshCalc();
 }
 function nextSetRoute(key, val){ const n = nextGet(); n.routes = n.routes||{}; n.routes[key] = nextIntVal(val); persist(); }
+function nextDomCan(){ return canWriteArea("next_vnutriros"); }
+function nextDomAdd(){ if (!nextDomCan()) return; const n = nextGet(); n.dom = n.dom||[]; n.dom.push({ from:LOCATIONS[0].id, to:(LOCATIONS[1]||LOCATIONS[0]).id, c20:0, c40:0 }); persist(); render(); }
+function nextDomDel(k){ const n = nextGet(); if (!n.dom||!nextDomCan()) return; n.dom.splice(k,1); persist(); render(); }
+function nextDomSet(k,f,v){ const n = nextGet(); if (!n.dom||!n.dom[k]||!nextDomCan()) return; if (f==="from"||f==="to") { n.dom[k][f] = v; persist(); render(); } else { n.dom[k][f] = nextIntVal(v); persist(); nextRefreshCalc(); } }
+function nextDomIn(locId, sz){ const n = nextGet(); return (n.dom||[]).reduce((a,r)=> (r&&r.to===locId&&r.from!==r.to) ? a+(Number(r[sz])||0) : a, 0); }
+function nextDomPanel(){
+  const n = nextGet(), ro = !nextDomCan(), list = n.dom||[];
+  const opt = sel=>LOCATIONS.map(l=>'<option value="'+l.id+'"'+(l.id===sel?' selected':'')+'>'+esc(l.name)+'</option>').join("");
+  const rows = list.map((r,k)=>'<tr><td><select class="fld fld-sm" '+(ro?'disabled ':'')+'onchange="nextDomSet('+k+',\'from\',this.value)">'+opt(r.from)+'</select></td><td><select class="fld fld-sm" '+(ro?'disabled ':'')+'onchange="nextDomSet('+k+',\'to\',this.value)">'+opt(r.to)+'</select></td>'+
+    ["c20","c40"].map(f=>'<td><input type="text" inputmode="numeric" class="fld fld-sm" style="width:84px;text-align:right" value="'+(Number(r[f])||0)+'"'+(ro?' disabled':'')+' onfocus="this.select()" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');nextDomSet('+k+',\''+f+'\',this.value)"></td>').join("")+
+    '<td>'+(r.from===r.to?'<span class="badge" style="background:#FDECEA;color:var(--danger)">откуда = куда</span>':'')+(ro?'':'<button class="btn" style="padding:2px 9px" title="Удалить" onclick="nextDomDel('+k+')">✕</button>')+'</td></tr>').join("");
+  return '<div class="panel"><p class="panel-title">Внутрироссийские перемещения на '+esc(nextLabel().toLowerCase())+'</p>'+
+    expl('перемещения следующего месяца вносятся заранее вместе с планом.','Вносит Внутрироссийский отдел. У получателя это подход следующего месяца: он входит в расчёт профицита и дефицита выше и станет активным при закрытии месяца (тогда попадёт в «Сток+Подход»). Сток отправителя программой не уменьшается.')+
+    (list.length?'<table><thead><tr><th>Откуда</th><th>Куда</th><th>20\', шт</th><th>40\', шт</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>':'<p class="muted" style="font-size:12.5px;margin:6px 0">Перемещений на следующий месяц пока нет.</p>')+
+    (ro?'<p class="panel-sub">Только просмотр: вносит Внутрироссийский отдел.</p>':'<div class="adm-actions" style="margin-top:8px"><button class="btn btn-primary" onclick="nextDomAdd()">+ Добавить перемещение</button></div>')+'</div>';
+}
 function nextClear(){ if (!confirm("Очистить все данные следующего месяца?")) return; state.next = {}; saveAndRender(); }
 function nextCell(ro, loc, grp, a, b, v, neg, ph){
   const cur = (v===undefined||v===null) ? "" : String(Number(v)||0);
@@ -4341,8 +4358,9 @@ function nextCalcRows(){
   LOCATIONS.forEach(l=>{
     const i = state.inputs[l.id], ni = (n.inputs&&n.inputs[l.id])||{}, r = { loc:l, sz:{} };
     ["20","40"].forEach(z=>{ const sz = "c"+z, e = end[l.id][sz], inflow = (((state.forecastInflow||{})[l.id]||{})[sz]||0), adj = Number(ni["adj"+z])||0;
-      const av = inflowAvail(l.id, sz, inflow), start = Math.max(0, e.end + adj + av), normV = ni["norm"+z]!==undefined ? (Number(ni["norm"+z])||0) : (i["norm"+z]||0);
-      r.sz[z] = { now:e.res, evac:e.evac, end:e.end, adj, inflow, av, start, norm:normV, normOwn:ni["norm"+z]!==undefined, diff:start-normV }; });
+      const dm = nextDomIn(l.id, sz), av = inflow + dm, start = Math.max(0, e.end + adj + av), normV = ni["norm"+z]!==undefined ? (Number(ni["norm"+z])||0) : (i["norm"+z]||0);
+      const pl = DIRECTIONS.reduce((a,d)=>a+(Number((((n.plan||{})[l.id]||{})[d.key]||{})[sz])||0),0);
+      r.sz[z] = { now:e.res, evac:e.evac, end:e.end, adj, inflow, dm, av, start, plan:pl, norm:normV, normOwn:ni["norm"+z]!==undefined, diff:start-pl-normV }; });
     rows.push(r);
   });
   return { rows, hasFc:!!end.__hasForecast };
@@ -4358,14 +4376,15 @@ function nextCalcBodyHtml(){
       '<td class="num-cell">'+two(z=>fmt(S[z].evac))+'</td>'+
       '<td class="num-cell" style="font-weight:700">'+two(z=>fmt(S[z].end))+'</td>'+
       '<td>'+two(z=>nextCell(roA,r.loc.id,"inputs","adj"+z,"",ni["adj"+z],true,"0"))+'</td>'+
-      '<td class="num-cell">'+two(z=>fmt(S[z].av)+(S[z].inflow?'<span class="teu-hint" style="display:inline"> из '+fmt(S[z].inflow)+'</span>':''))+'</td>'+
+      '<td class="num-cell">'+two(z=>fmt(S[z].av)+((S[z].dm)?'<div class="teu-hint">прогноз '+fmt(S[z].inflow)+' + перемещения '+fmt(S[z].dm)+'</div>':''))+'</td>'+
       '<td class="num-cell" style="font-weight:700">'+two(z=>fmt(S[z].start))+'</td>'+
+      '<td class="num-cell">'+two(z=>fmt(S[z].plan))+'</td>'+
       '<td>'+two(z=>nextCell(roN,r.loc.id,"inputs","norm"+z,"",ni["norm"+z],false,String(state.inputs[r.loc.id]["norm"+z]||0)))+'</td>'+
       '<td class="num-cell">'+two(z=>nextDiffHtml(S[z].diff))+'</td></tr>'; }).join("");
-  const tot = ["20","40"].map(z=>c.rows.reduce((a,r)=>({ end:a.end+r.sz[z].end, start:a.start+r.sz[z].start, norm:a.norm+r.sz[z].norm, diff:a.diff+r.sz[z].diff }),{end:0,start:0,norm:0,diff:0}));
-  const foot = '<tr class="total-row"><td>Итого</td><td></td><td></td><td class="num-cell">20\': '+fmt(tot[0].end)+'<br>40\': '+fmt(tot[1].end)+'</td><td></td><td></td><td class="num-cell">20\': '+fmt(tot[0].start)+'<br>40\': '+fmt(tot[1].start)+'</td><td class="num-cell">20\': '+fmt(tot[0].norm)+'<br>40\': '+fmt(tot[1].norm)+'</td><td class="num-cell">'+nextDiffHtml(tot[0].diff).replace('профицит','20\' профицит').replace('дефицит','20\' дефицит').replace('в норме','20\' в норме')+nextDiffHtml(tot[1].diff).replace('профицит','40\' профицит').replace('дефицит','40\' дефицит').replace('в норме','40\' в норме')+'</td></tr>';
+  const tot = ["20","40"].map(z=>c.rows.reduce((a,r)=>({ end:a.end+r.sz[z].end, start:a.start+r.sz[z].start, plan:a.plan+r.sz[z].plan, norm:a.norm+r.sz[z].norm, diff:a.diff+r.sz[z].diff }),{end:0,start:0,plan:0,norm:0,diff:0}));
+  const foot = '<tr class="total-row"><td>Итого</td><td></td><td></td><td class="num-cell">20\': '+fmt(tot[0].end)+'<br>40\': '+fmt(tot[1].end)+'</td><td></td><td></td><td class="num-cell">20\': '+fmt(tot[0].start)+'<br>40\': '+fmt(tot[1].start)+'</td><td class="num-cell">20\': '+fmt(tot[0].plan)+'<br>40\': '+fmt(tot[1].plan)+'</td><td class="num-cell">20\': '+fmt(tot[0].norm)+'<br>40\': '+fmt(tot[1].norm)+'</td><td class="num-cell">'+nextDiffHtml(tot[0].diff).replace('профицит','20\' профицит').replace('дефицит','20\' дефицит').replace('в норме','20\' в норме')+nextDiffHtml(tot[1].diff).replace('профицит','40\' профицит').replace('дефицит','40\' дефицит').replace('в норме','40\' в норме')+'</td></tr>';
   return (c.hasFc ? '' : '<p class="teu-hint" style="color:var(--danger)">Нет закрытых месяцев для прогноза выполнения: ожидаемый вывоз взят только по уже внесённому факту.</p>')+
-    '<div style="overflow-x:auto"><table><thead><tr><th>Локация</th><th>Сток сейчас<br><span class="teu-hint">с учётом подхода</span></th><th>Ожидаемый вывоз до конца месяца<br><span class="teu-hint">по прогнозу выполнения</span></th><th>Сток на конец месяца<br><span class="teu-hint">расчёт</span></th><th>Корректировка стока<br><span class="teu-hint">± шт, вносит Эксплуатация</span></th><th>Подход следующего месяца<br><span class="teu-hint">доступно, из «Прогноза»</span></th><th>Сток на старт месяца</th><th>Норма<br><span class="teu-hint">пусто — как сейчас</span></th><th>Профицит / дефицит к норме</th></tr></thead><tbody>'+body+foot+'</tbody></table></div>';
+    '<div style="overflow-x:auto"><table><thead><tr><th>Локация</th><th>Сток сейчас<br><span class="teu-hint">с учётом подхода</span></th><th>Ожидаемый вывоз до конца месяца<br><span class="teu-hint">по прогнозу выполнения</span></th><th>Сток на конец месяца<br><span class="teu-hint">расчёт</span></th><th>Корректировка стока<br><span class="teu-hint">± шт, вносит Эксплуатация</span></th><th>Подход следующего месяца<br><span class="teu-hint">доступно, из «Прогноза»</span></th><th>Сток на старт месяца</th><th>План следующего месяца<br><span class="teu-hint">все департаменты</span></th><th>Норма<br><span class="teu-hint">пусто — как сейчас</span></th><th>Профицит / дефицит<br><span class="teu-hint">старт − план − норма</span></th></tr></thead><tbody>'+body+foot+'</tbody></table></div>';
 }
 function renderNextTab(){
   const n = nextGet();
@@ -4374,11 +4393,11 @@ function renderNextTab(){
     return '<tr><td class="loc-name">'+esc(l.name)+'</td>'+DIRECTIONS.map(d=>{ const q = p[d.key]||{}, ro = !canWriteArea("next_"+d.key); return '<td>'+nextCell(ro,l.id,"plan",d.key,"c20",q.c20)+'</td><td>'+nextCell(ro,l.id,"plan",d.key,"c40",q.c40)+'</td>'; }).join("")+'</tr>'; }).join("");
   const clearBtn = ONLINE.isAdmin ? '<div class="adm-actions" style="margin-top:12px"><button class="btn btn-danger" onclick="nextClear()">Очистить следующий месяц</button></div>' : '';
   return '<div class="panel"><p class="panel-title">Следующий месяц: '+esc(nextLabel())+' — сток, подход, профицит и дефицит</p>'+
-    expl('какой сток ожидается на конец текущего месяца и что останется сверх нормы (или не хватит) в начале следующего.','Сток на конец месяца = сток сейчас (с учётом подхода) − ожидаемый вывоз до конца месяца: по каждому департаменту берётся большее из «уже вывезено» и «план × прогнозный % выполнения» (вкладка «Прогноз»). К нему прибавляются ваша корректировка и подход следующего месяца из «Прогноза» (учитывается только «доступно» с % сдачи и ремонтом). Профицит или дефицит = сток на старт месяца − норма. Текущий месяц при этом не закрывается: расчёт пересчитывается при каждом изменении факта, плана и прогноза. Норму можно задать отдельно для следующего месяца, иначе берётся текущая.')+
+    expl('какой сток ожидается на конец текущего месяца и что останется сверх нормы (или не хватит) в начале следующего.','Сток на конец месяца = сток сейчас (с учётом подхода) − ожидаемый вывоз до конца месяца: по каждому департаменту берётся большее из «уже вывезено» и «план × прогнозный % выполнения» (вкладка «Прогноз»). К нему прибавляются ваша корректировка и подход следующего месяца целиком (прогноз из «Прогноза» + внутрироссийские перемещения, без поправки на недосдачу и ремонт). Профицит или дефицит = сток на старт месяца − план следующего месяца (все департаменты) − норма. Текущий месяц при этом не закрывается: расчёт пересчитывается при каждом изменении факта, плана и прогноза. Норму можно задать отдельно для следующего месяца, иначе берётся текущая.')+
     '<div id="nextCalcBody">'+nextCalcBodyHtml()+'</div></div>'+
     '<div class="panel"><p class="panel-title">План на '+esc(nextLabel().toLowerCase())+' по департаментам</p>'+
     expl('каждый отдел вносит свой план следующего месяца заранее.','Свой план вносит свой отдел (помечен «ваш»), остальные видят. Поезда ЖД вносят во вкладке «Поезда». При нажатии «Закрыть месяц» эти цифры станут планами нового месяца, стоком (расчёт + корректировка), нормами и планом поездов; прогнозный подход и перемещения применяются как раньше. Вписанное здесь не меняет текущий месяц.')+
-    '<div style="overflow-x:auto"><table><thead>'+planHead+'</thead><tbody>'+planRows+'</tbody></table></div>'+clearBtn+'</div>';
+    '<div style="overflow-x:auto"><table><thead>'+planHead+'</thead><tbody>'+planRows+'</tbody></table></div>'+clearBtn+'</div>'+nextDomPanel();
 }
 function nextTrainsPanel(){
   const n = nextGet(), ro = !canWriteArea("next_routes");
@@ -4411,6 +4430,7 @@ closeMonth = function(){
     }
     LOCATIONS.forEach(l=>{ const q = fi[l.id]||{}; if (Number(q.c20)) state.inputs[l.id].imp20 = Number(q.c20)||0; if (Number(q.c40)) state.inputs[l.id].imp40 = Number(q.c40)||0; });
     state.forecastInflow = defaultInflow();
+    state.domestic = (nx.dom||[]).filter(r=>r&&(Number(r.c20)||Number(r.c40))).map(r=>({from:r.from,to:r.to,c20:Number(r.c20)||0,c40:Number(r.c40)||0}));
     state.next = {}; saveAndRender();
   }
 };

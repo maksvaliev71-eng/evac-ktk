@@ -2902,10 +2902,10 @@ function render(){
   try { refreshAutoAcc(); } catch(e){}
   document.getElementById("monthPill").textContent = "Текущий месяц: " + MONTH_NAMES[state.monthCursor % 12] + " " + (state.currentYear||"");
   const tabsDef = [
-    { key: "input", label: "Ввод данных" },
-    { key: "distribute", label: "Распределение" },
+    { key: "input", label: "Сток+Подход" },
+    { key: "distribute", label: "Планирование" },
     { key: "trains", label: "Поезда" },
-    { key: "dashboard", label: "Дашборд" },
+    { key: "dashboard", label: "Дашборд (Итог)" },
     { key: "forecast", label: "Прогноз" },
     { key: "archive", label: "Архив" },
     { key: "drops", label: "Дроп-офф" },
@@ -2913,6 +2913,7 @@ function render(){
   if (typeof ONLINE!=="undefined" && ONLINE.me && typeof nextTabVisible==="function" && nextTabVisible()) tabsDef.push({ key: "next", label: "Следующий месяц" });
   if (typeof ONLINE!=="undefined" && ONLINE.me && typeof storageTabVisible==="function" && storageTabVisible()) tabsDef.push({ key: "storage", label: "Хранение" });
   if (typeof ONLINE!=="undefined" && ONLINE.isAdmin) tabsDef.push({ key: "admin", label: "Админ" }); else if (typeof ONLINE!=="undefined" && ONLINE.me && ONLINE.me.dept==="manager") tabsDef.push({ key: "admin", label: "Комментарии" });
+  { const ord=["input","distribute","trains","dashboard","forecast","archive","next","storage","drops","admin"]; tabsDef.sort((x,y)=>ord.indexOf(x.key)-ord.indexOf(y.key)); }
   document.getElementById("tabs").innerHTML = tabsDef.map(t=>
     '<div class="tab '+(state.tab===t.key?"active":"")+'" onclick="setTab(\''+t.key+'\')">'+t.label+'</div>'
   ).join("");

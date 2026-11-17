@@ -10,11 +10,11 @@ fs.mkdirSync(APP_DIR, { recursive: true });
 const INDEX = fs.existsSync(path.join(__dirname, "index.html")) ? path.join(__dirname, "index.html") : path.join(__dirname, "public", "index.html");
 
 const DEFAULT_PERMS = {
-  vnutriros: ["plan_vnutriros", "fact_vnutriros"],
-  export: ["plan_export", "fact_export"],
+  vnutriros: ["plan_vnutriros", "fact_vnutriros", "domestic", "next_vnutriros"],
+  export: ["plan_export", "fact_export", "next_export"],
   import: ["import"],
-  rail: ["routes", "trainsCfg"],
-  expl: ["fact_expl", "import_fact", "stock"],
+  rail: ["routes", "trainsCfg", "next_routes"],
+  expl: ["fact_expl", "import_fact", "stock", "next_expl", "next_stock"],
 };
 // частичные права: что можно менять внутри общего документа
 const IMPFW = []; for (let i = 0; i < 5; i++) { IMPFW.push("impFw" + i + "_20", "impFw" + i + "_40"); }
@@ -32,6 +32,9 @@ function writeJson(file, obj) {
 const USERS_F = path.join(DATA_DIR, "users.json"), PERMS_F = path.join(DATA_DIR, "perms.json"), LOG_F = path.join(DATA_DIR, "log.json");
 let users = readJson(USERS_F, {});      // id -> {login,name,dept,salt,iter,hash}
 let perms = readJson(PERMS_F, null);    // {map}
+// новые области доступа (перемещения, планы следующего месяца) добавляются сохранённым правам один раз; дальше админ управляет ими сам
+{ const NEWP = { vnutriros: ["domestic", "next_vnutriros"], export: ["next_export"], rail: ["next_routes"], expl: ["next_expl", "next_stock"] };
+  if (perms && perms.map && !perms.v2) { for (const d of Object.keys(NEWP)) if (Array.isArray(perms.map[d])) for (const a of NEWP[d]) if (!perms.map[d].includes(a)) perms.map[d].push(a); perms.v2 = 1; try { writeJson(PERMS_F, perms); } catch (e) {} } }
 let logs = readJson(LOG_F, []);
 const EXT_F = path.join(DATA_DIR, "ext.json"), MAIL_F = path.join(DATA_DIR, "mail.json"), BK_DIR = path.join(DATA_DIR, "backups");
 let ext = readJson(EXT_F, {});          // статусы готовности, сроки, комментарии
@@ -88,6 +91,7 @@ function partialFields(me, id) {
 }
 // какой части статуса соответствует область данных
 const AREA_KIND = {
+  domestic: { dept: "vnutriros", kind: "plan" },
   plan_vnutriros: { dept: "vnutriros", kind: "plan" }, fact_vnutriros: { dept: "vnutriros", kind: "fact" },
   plan_export: { dept: "export", kind: "plan" }, fact_export: { dept: "export", kind: "fact" },
   import: { dept: "import", kind: "import" }, routes: { dept: "rail", kind: "rail" },
@@ -810,7 +814,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/perms" && req.method === "PUT") {
       const b = await readBody(req, 20000);
       if (!b.map || typeof b.map !== "object") return send(res, 400, { error: "Неверные данные" });
-      perms = { map: b.map }; writeJson(PERMS_F, perms); broadcast("perms", {}); return send(res, 200, { ok: true });
+      perms = { map: b.map, v2: 1 }; writeJson(PERMS_F, perms); broadcast("perms", {}); return send(res, 200, { ok: true });
     }
     if (p === "/api/deadlines" && req.method === "PUT") {
       const b = await readBody(req, 2000), d = {};

@@ -1169,14 +1169,17 @@ function importDataFile(inputEl){
 }
 
 // ---------- focus preservation ----------
+function focusables(){ return Array.from(document.querySelectorAll("#content input:not([type=checkbox]):not([type=file]):not([type=month]):not([type=radio]), #content select")); }
 function getFocusInfo(){
   const el = document.activeElement;
-  if (!el || el.tagName !== "INPUT" || !el.dataset.key) return null;
-  return { key: el.dataset.key, selStart: el.selectionStart, selEnd: el.selectionEnd };
+  if (!el || el.tagName !== "INPUT") return null;
+  if (el.dataset.key) return { key: el.dataset.key, selStart: el.selectionStart, selEnd: el.selectionEnd };
+  const idx = focusables().indexOf(el);
+  return idx<0 ? null : { idx, selStart: el.selectionStart, selEnd: el.selectionEnd };
 }
 function restoreFocus(info){
   if (!info) return;
-  const el = document.querySelector('[data-key="'+info.key+'"]');
+  const el = info.key ? document.querySelector('[data-key="'+info.key+'"]') : focusables()[info.idx];
   if (el) { el.focus(); try { el.setSelectionRange(info.selStart, info.selEnd); } catch(e){} }
 }
 function saveAndRender(){ persist(); const f=getFocusInfo(); render(); restoreFocus(f); }
@@ -3003,7 +3006,7 @@ const AREAS = [
   { id:"next_vnutriros", label:"Следующий месяц: план — Внутрироссийский" },
   { id:"next_export",    label:"Следующий месяц: план — Экспортный" },
   { id:"next_expl",      label:"Следующий месяц: план — Эксплуатация" },
-  { id:"next_stock",     label:"Следующий месяц: корректировка стока" },
+  { id:"next_stock",     label:"Следующий месяц: сток на конец месяца (вручную)" },
   { id:"next_norm",      label:"Следующий месяц: нормы" },
   { id:"next_routes",    label:"Следующий месяц: план поездов" },
 ];
@@ -4327,7 +4330,7 @@ function nextHasData(){ const n = state.next; if (!n) return false; let any=fals
 function nextIntVal(val, neg){ const s = String(val).replace(neg?/[^0-9-]/g:/[^0-9]/g,""); const v = Math.round(Number(s)||0); return neg ? v : Math.max(0,v); }
 function nextSet(loc, grp, a, b, val){
   const n = nextGet();
-  if (grp==="inputs") { n.inputs = n.inputs||{}; n.inputs[loc] = n.inputs[loc]||{}; n.inputs[loc][a] = nextIntVal(val, /^adj/.test(a)); }
+  if (grp==="inputs") { n.inputs = n.inputs||{}; n.inputs[loc] = n.inputs[loc]||{}; if (String(val).trim()==="") delete n.inputs[loc][a]; else n.inputs[loc][a] = nextIntVal(val); }
   else { n.plan = n.plan||{}; n.plan[loc] = n.plan[loc]||{}; n.plan[loc][a] = n.plan[loc][a]||{}; n.plan[loc][a][b] = nextIntVal(val); }
   persist(); nextRefreshCalc();
 }
@@ -4341,7 +4344,7 @@ function nextDomPanel(){
   const n = nextGet(), ro = !nextDomCan(), list = n.dom||[];
   const opt = sel=>LOCATIONS.map(l=>'<option value="'+l.id+'"'+(l.id===sel?' selected':'')+'>'+esc(l.name)+'</option>').join("");
   const rows = list.map((r,k)=>'<tr><td><select class="fld fld-sm" '+(ro?'disabled ':'')+'onchange="nextDomSet('+k+',\'from\',this.value)">'+opt(r.from)+'</select></td><td><select class="fld fld-sm" '+(ro?'disabled ':'')+'onchange="nextDomSet('+k+',\'to\',this.value)">'+opt(r.to)+'</select></td>'+
-    ["c20","c40"].map(f=>'<td><input type="text" inputmode="numeric" class="fld fld-sm" style="width:84px;text-align:right" value="'+(Number(r[f])||0)+'"'+(ro?' disabled':'')+' onfocus="this.select()" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');nextDomSet('+k+',\''+f+'\',this.value)"></td>').join("")+
+    ["c20","c40"].map(f=>'<td><input type="text" inputmode="numeric" class="fld fld-sm" style="width:70px;text-align:right" value="'+(Number(r[f])||0)+'"'+(ro?' disabled':'')+' onfocus="this.select()" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');nextDomSet('+k+',\''+f+'\',this.value)"></td>').join("")+
     '<td>'+(r.from===r.to?'<span class="badge" style="background:#FDECEA;color:var(--danger)">откуда = куда</span>':'')+(ro?'':'<button class="btn" style="padding:2px 9px" title="Удалить" onclick="nextDomDel('+k+')">✕</button>')+'</td></tr>').join("");
   return '<div class="panel"><p class="panel-title">Внутрироссийские перемещения на '+esc(nextLabel().toLowerCase())+'</p>'+
     expl('перемещения следующего месяца вносятся заранее вместе с планом.','Вносит Внутрироссийский отдел. У получателя это подход следующего месяца: он входит в расчёт профицита и дефицита выше и станет активным при закрытии месяца (тогда попадёт в «Сток+Подход»). Сток отправителя программой не уменьшается.')+
@@ -4351,40 +4354,39 @@ function nextDomPanel(){
 function nextClear(){ if (!confirm("Очистить все данные следующего месяца?")) return; state.next = {}; saveAndRender(); }
 function nextCell(ro, loc, grp, a, b, v, neg, ph){
   const cur = (v===undefined||v===null) ? "" : String(Number(v)||0);
-  return '<input type="text" inputmode="'+(neg?'text':'numeric')+'" class="fld fld-sm" style="width:80px;text-align:right" value="'+(grp==="inputs"&&(a==="norm20"||a==="norm40")&&v===undefined?"":cur)+'"'+(ph!==undefined?' placeholder="'+ph+'"':'')+(ro?' disabled':'')+' onfocus="this.select()" oninput="this.value=this.value.replace('+(neg?'/[^0-9-]/g':'/[^0-9]/g')+',\'\');nextSet(\''+loc+'\',\''+grp+'\',\''+a+'\',\''+(b||"")+'\',this.value)">';
+  return '<input type="text" inputmode="'+(neg?'text':'numeric')+'" class="fld fld-sm" style="width:62px;text-align:right" value="'+(grp==="inputs"&&(a==="norm20"||a==="norm40")&&v===undefined?"":cur)+'"'+(ph!==undefined?' placeholder="'+ph+'"':'')+(ro?' disabled':'')+' onfocus="this.select()" oninput="this.value=this.value.replace('+(neg?'/[^0-9-]/g':'/[^0-9]/g')+',\'\');nextSet(\''+loc+'\',\''+grp+'\',\''+a+'\',\''+(b||"")+'\',this.value)">';
 }
 function nextCalcRows(){
   const n = nextGet(), end = fcEndStockAll(), rows = [];
   LOCATIONS.forEach(l=>{
     const i = state.inputs[l.id], ni = (n.inputs&&n.inputs[l.id])||{}, r = { loc:l, sz:{} };
-    ["20","40"].forEach(z=>{ const sz = "c"+z, e = end[l.id][sz], inflow = (((state.forecastInflow||{})[l.id]||{})[sz]||0), adj = Number(ni["adj"+z])||0;
-      const dm = nextDomIn(l.id, sz), av = inflow + dm, start = Math.max(0, e.end + adj + av), normV = ni["norm"+z]!==undefined ? (Number(ni["norm"+z])||0) : (i["norm"+z]||0);
+    ["20","40"].forEach(z=>{ const sz = "c"+z, e = end[l.id][sz], inflow = (((state.forecastInflow||{})[l.id]||{})[sz]||0), hasAdj = ni["adj"+z]!==undefined && ni["adj"+z]!==null && ni["adj"+z]!=="", adj = hasAdj ? (Number(ni["adj"+z])||0) : 0;
+      const dm = nextDomIn(l.id, sz), av = inflow + dm, endUsed = hasAdj ? adj : e.end, start = Math.max(0, endUsed + av), normV = ni["norm"+z]!==undefined ? (Number(ni["norm"+z])||0) : (i["norm"+z]||0);
       const pl = DIRECTIONS.reduce((a,d)=>a+(Number((((n.plan||{})[l.id]||{})[d.key]||{})[sz])||0),0);
-      r.sz[z] = { now:e.res, evac:e.evac, end:e.end, adj, inflow, dm, av, start, plan:pl, norm:normV, normOwn:ni["norm"+z]!==undefined, diff:start-pl-normV }; });
+      r.sz[z] = { now:e.res, evac:e.evac, end:e.end, adj, hasAdj, endUsed, inflow, dm, av, start, plan:pl, norm:normV, normOwn:ni["norm"+z]!==undefined, diff:start-pl-normV }; });
     rows.push(r);
   });
   return { rows, hasFc:!!end.__hasForecast };
 }
-function nextRefreshCalc(){ const el = document.getElementById("nextCalcBody"); if (el) el.innerHTML = nextCalcBodyHtml(); }
+function nextRefreshCalc(){ const el = document.getElementById("nextCalcBody"); if (!el) return; const f = getFocusInfo(); el.innerHTML = nextCalcBodyHtml(); restoreFocus(f); }
 function nextDiffHtml(v){ const c = v>0 ? "var(--ok)" : v<0 ? "var(--danger)" : "inherit"; return '<b style="color:'+c+'">'+(v>0?'+':'')+fmt(v)+'</b><div class="teu-hint">'+(v>0?'профицит':v<0?'дефицит':'в норме')+'</div>'; }
 function nextCalcBodyHtml(){
   const c = nextCalcRows(), roA = !canWriteArea("next_stock"), roN = !canWriteArea("next_norm"), n = nextGet();
-  const two = (f)=>'20\': '+f("20")+'<br>40\': '+f("40");
-  const body = c.rows.map(r=>{ const S = r.sz, ni = (n.inputs&&n.inputs[r.loc.id])||{};
-    return '<tr><td class="loc-name">'+esc(r.loc.name)+'</td>'+
-      '<td class="num-cell">'+two(z=>fmt(S[z].now))+'</td>'+
-      '<td class="num-cell">'+two(z=>fmt(S[z].evac))+'</td>'+
-      '<td class="num-cell" style="font-weight:700">'+two(z=>fmt(S[z].end))+'</td>'+
-      '<td>'+two(z=>nextCell(roA,r.loc.id,"inputs","adj"+z,"",ni["adj"+z],true,"0"))+'</td>'+
-      '<td class="num-cell">'+two(z=>fmt(S[z].av)+((S[z].dm)?'<div class="teu-hint">прогноз '+fmt(S[z].inflow)+' + перемещения '+fmt(S[z].dm)+'</div>':''))+'</td>'+
-      '<td class="num-cell" style="font-weight:700">'+two(z=>fmt(S[z].start))+'</td>'+
-      '<td class="num-cell">'+two(z=>fmt(S[z].plan))+'</td>'+
-      '<td>'+two(z=>nextCell(roN,r.loc.id,"inputs","norm"+z,"",ni["norm"+z],false,String(state.inputs[r.loc.id]["norm"+z]||0)))+'</td>'+
-      '<td class="num-cell">'+two(z=>nextDiffHtml(S[z].diff))+'</td></tr>'; }).join("");
-  const tot = ["20","40"].map(z=>c.rows.reduce((a,r)=>({ end:a.end+r.sz[z].end, start:a.start+r.sz[z].start, plan:a.plan+r.sz[z].plan, norm:a.norm+r.sz[z].norm, diff:a.diff+r.sz[z].diff }),{end:0,start:0,plan:0,norm:0,diff:0}));
-  const foot = '<tr class="total-row"><td>Итого</td><td></td><td></td><td class="num-cell">20\': '+fmt(tot[0].end)+'<br>40\': '+fmt(tot[1].end)+'</td><td></td><td></td><td class="num-cell">20\': '+fmt(tot[0].start)+'<br>40\': '+fmt(tot[1].start)+'</td><td class="num-cell">20\': '+fmt(tot[0].plan)+'<br>40\': '+fmt(tot[1].plan)+'</td><td class="num-cell">20\': '+fmt(tot[0].norm)+'<br>40\': '+fmt(tot[1].norm)+'</td><td class="num-cell">'+nextDiffHtml(tot[0].diff).replace('профицит','20\' профицит').replace('дефицит','20\' дефицит').replace('в норме','20\' в норме')+nextDiffHtml(tot[1].diff).replace('профицит','40\' профицит').replace('дефицит','40\' дефицит').replace('в норме','40\' в норме')+'</td></tr>';
+  const num = v=>'<td class="num-cell">'+fmt(v)+'</td>';
+  const dsp = (v)=>'<td class="num-cell" style="color:'+(v>0?'var(--ok)':v<0?'var(--danger)':'inherit')+';font-weight:700">'+(v>0?'+':'')+fmt(v)+'<span class="teu-hint" style="display:block;margin:0">'+(v>0?'профицит':v<0?'дефицит':'в норме')+'</span></td>';
+  const body = c.rows.map(r=>{ const ni = (n.inputs&&n.inputs[r.loc.id])||{};
+    return ["20","40"].map((z,k)=>{ const S = r.sz[z];
+      return '<tr'+(k===1?' style="border-bottom:2px solid var(--line,#d9dee6)"':'')+'>'+(k===0?'<td class="loc-name" rowspan="2">'+esc(r.loc.name)+'</td>':'')+
+        '<td class="num-cell" style="color:var(--muted)">'+z+'\'</td>'+num(S.now)+num(S.evac)+
+        '<td class="num-cell" style="'+(S.hasAdj?'color:var(--muted);text-decoration:line-through':'font-weight:700')+'">'+fmt(S.end)+'</td>'+
+        '<td>'+nextCell(roA,r.loc.id,"inputs","adj"+z,"",ni["adj"+z],false,"—")+'</td>'+
+        '<td class="num-cell" title="'+(S.dm?'прогноз '+fmt(S.inflow)+' + перемещения '+fmt(S.dm):'прогноз из вкладки «Прогноз»')+'">'+fmt(S.av)+(S.dm?'<span class="teu-hint" style="display:block;margin:0">+'+fmt(S.dm)+' перем.</span>':'')+'</td>'+
+        '<td class="num-cell" style="font-weight:700">'+fmt(S.start)+'</td>'+num(S.plan)+
+        '<td>'+nextCell(roN,r.loc.id,"inputs","norm"+z,"",ni["norm"+z],false,String(state.inputs[r.loc.id]["norm"+z]||0))+'</td>'+dsp(S.diff)+'</tr>'; }).join(""); }).join("");
+  const tot = ["20","40"].map(z=>c.rows.reduce((a,r)=>({ end:a.end+r.sz[z].endUsed, start:a.start+r.sz[z].start, plan:a.plan+r.sz[z].plan, norm:a.norm+r.sz[z].norm, diff:a.diff+r.sz[z].diff }),{end:0,start:0,plan:0,norm:0,diff:0}));
+  const foot = ["20","40"].map((z,k)=>{ const T = tot[k]; return '<tr class="total-row">'+(k===0?'<td rowspan="2">Итого</td>':'')+'<td class="num-cell">'+z+'\'</td><td></td><td></td>'+num(T.end)+'<td></td><td></td>'+num(T.start)+num(T.plan)+num(T.norm)+dsp(T.diff)+'</tr>'; }).join("");
   return (c.hasFc ? '' : '<p class="teu-hint" style="color:var(--danger)">Нет закрытых месяцев для прогноза выполнения: ожидаемый вывоз взят только по уже внесённому факту.</p>')+
-    '<div style="overflow-x:auto"><table><thead><tr><th>Локация</th><th>Сток сейчас<br><span class="teu-hint">с учётом подхода</span></th><th>Ожидаемый вывоз до конца месяца<br><span class="teu-hint">по прогнозу выполнения</span></th><th>Сток на конец месяца<br><span class="teu-hint">расчёт</span></th><th>Корректировка стока<br><span class="teu-hint">± шт, вносит Эксплуатация</span></th><th>Подход следующего месяца<br><span class="teu-hint">доступно, из «Прогноза»</span></th><th>Сток на старт месяца</th><th>План следующего месяца<br><span class="teu-hint">все департаменты</span></th><th>Норма<br><span class="teu-hint">пусто — как сейчас</span></th><th>Профицит / дефицит<br><span class="teu-hint">старт − план − норма</span></th></tr></thead><tbody>'+body+foot+'</tbody></table></div>';
+    '<table class="nxt"><thead><tr><th>Локация</th><th></th><th title="с учётом подхода текущего месяца">Сток сейчас</th><th title="по прогнозу выполнения из «Прогноза»">Вывоз до конца мес.</th><th title="сток сейчас − ожидаемый вывоз">Конец мес.: расчёт</th><th title="если внесён — берётся вместо расчёта">Конец мес.: вручную</th><th title="прогноз подхода + перемещения, целиком">Подход след. мес.</th><th>Сток на старт</th><th title="все департаменты">План след. мес.</th><th title="пусто — как сейчас">Норма</th><th title="старт − план − норма">Проф. / деф.</th></tr></thead><tbody>'+body+foot+'</tbody></table>';
 }
 function renderNextTab(){
   const n = nextGet();
@@ -4393,16 +4395,16 @@ function renderNextTab(){
     return '<tr><td class="loc-name">'+esc(l.name)+'</td>'+DIRECTIONS.map(d=>{ const q = p[d.key]||{}, ro = !canWriteArea("next_"+d.key); return '<td>'+nextCell(ro,l.id,"plan",d.key,"c20",q.c20)+'</td><td>'+nextCell(ro,l.id,"plan",d.key,"c40",q.c40)+'</td>'; }).join("")+'</tr>'; }).join("");
   const clearBtn = ONLINE.isAdmin ? '<div class="adm-actions" style="margin-top:12px"><button class="btn btn-danger" onclick="nextClear()">Очистить следующий месяц</button></div>' : '';
   return '<div class="panel"><p class="panel-title">Следующий месяц: '+esc(nextLabel())+' — сток, подход, профицит и дефицит</p>'+
-    expl('какой сток ожидается на конец текущего месяца и что останется сверх нормы (или не хватит) в начале следующего.','Сток на конец месяца = сток сейчас (с учётом подхода) − ожидаемый вывоз до конца месяца: по каждому департаменту берётся большее из «уже вывезено» и «план × прогнозный % выполнения» (вкладка «Прогноз»). К нему прибавляются ваша корректировка и подход следующего месяца целиком (прогноз из «Прогноза» + внутрироссийские перемещения, без поправки на недосдачу и ремонт). Профицит или дефицит = сток на старт месяца − план следующего месяца (все департаменты) − норма. Текущий месяц при этом не закрывается: расчёт пересчитывается при каждом изменении факта, плана и прогноза. Норму можно задать отдельно для следующего месяца, иначе берётся текущая.')+
+    expl('какой сток ожидается на конец текущего месяца и что останется сверх нормы (или не хватит) в начале следующего.','Сток на конец месяца (расчёт) = сток сейчас (с учётом подхода) − ожидаемый вывоз до конца месяца: по каждому департаменту берётся большее из «уже вывезено» и «план × прогнозный % выполнения» (вкладка «Прогноз»). Если в «Конец мес.: вручную» внесена цифра, она используется вместо расчёта (пусто — берётся расчёт). К нему прибавляется подход следующего месяца целиком (прогноз из «Прогноза» + внутрироссийские перемещения, без поправки на недосдачу и ремонт). Профицит или дефицит = сток на старт месяца − план следующего месяца (все департаменты) − норма. Текущий месяц при этом не закрывается: расчёт пересчитывается при каждом изменении факта, плана и прогноза. Норму можно задать отдельно для следующего месяца, иначе берётся текущая.')+
     '<div id="nextCalcBody">'+nextCalcBodyHtml()+'</div></div>'+
     '<div class="panel"><p class="panel-title">План на '+esc(nextLabel().toLowerCase())+' по департаментам</p>'+
-    expl('каждый отдел вносит свой план следующего месяца заранее.','Свой план вносит свой отдел (помечен «ваш»), остальные видят. Поезда ЖД вносят во вкладке «Поезда». При нажатии «Закрыть месяц» эти цифры станут планами нового месяца, стоком (расчёт + корректировка), нормами и планом поездов; прогнозный подход и перемещения применяются как раньше. Вписанное здесь не меняет текущий месяц.')+
-    '<div style="overflow-x:auto"><table><thead>'+planHead+'</thead><tbody>'+planRows+'</tbody></table></div>'+clearBtn+'</div>'+nextDomPanel();
+    expl('каждый отдел вносит свой план следующего месяца заранее.','Свой план вносит свой отдел (помечен «ваш»), остальные видят. Поезда ЖД вносят во вкладке «Поезда». При нажатии «Закрыть месяц» эти цифры станут планами нового месяца, стоком (вручную или расчёт), нормами и планом поездов; прогнозный подход и перемещения применяются как раньше. Вписанное здесь не меняет текущий месяц.')+
+    '<table class="nxt"><thead>'+planHead+'</thead><tbody>'+planRows+'</tbody></table>'+clearBtn+'</div>'+nextDomPanel();
 }
 function nextTrainsPanel(){
   const n = nextGet(), ro = !canWriteArea("next_routes");
   const rows = ROUTES.map(r=>{ const rs = state.routes[r.key]||{}; const v = n.routes ? n.routes[r.key] : undefined;
-    return '<tr><td class="loc-name">'+esc(r.label)+'</td><td class="num-cell">'+fmt(rs.plan||0)+'</td><td><input type="text" inputmode="numeric" class="fld fld-sm" style="width:84px;text-align:right" value="'+(v===undefined?"":(Number(v)||0))+'" placeholder="0"'+(ro?' disabled':'')+' onfocus="this.select()" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');nextSetRoute(\''+r.key+'\',this.value)"></td></tr>'; }).join("");
+    return '<tr><td class="loc-name">'+esc(r.label)+'</td><td class="num-cell">'+fmt(rs.plan||0)+'</td><td><input type="text" inputmode="numeric" class="fld fld-sm" style="width:70px;text-align:right" value="'+(v===undefined?"":(Number(v)||0))+'" placeholder="0"'+(ro?' disabled':'')+' onfocus="this.select()" oninput="this.value=this.value.replace(/[^0-9]/g,\'\');nextSetRoute(\''+r.key+'\',this.value)"></td></tr>'; }).join("");
   const sumN = ROUTES.reduce((a,r)=>a+(Number(n.routes&&n.routes[r.key])||0),0), sumC = ROUTES.reduce((a,r)=>a+(Number((state.routes[r.key]||{}).plan)||0),0);
   return '<div class="panel"><p class="panel-title">План поездов на '+esc(nextLabel().toLowerCase())+'</p>'+
     expl('планы поездов следующего месяца вносятся заранее.','Количество поездов по направлениям на следующий месяц. Вносит ЖД отдел, остальные видят. При закрытии месяца значения станут планом поездов нового месяца; текущий месяц не меняется. Пусто — план не меняется.')+
@@ -4423,7 +4425,7 @@ closeMonth = function(){
     if (had) {
       LOCATIONS.forEach(l=>{
         const r = state.inputs[l.id], i = (nx.inputs||{})[l.id]||{};
-        ["20","40"].forEach(z=>{ const e = end && end[l.id] && end[l.id]["c"+z]; let st = i["resource"+z]; if (e) st = Math.max(0, e.end + (Number(i["adj"+z])||0)); else if (st!==undefined) st = Number(st)||0; if (st!==undefined) r["resource"+z] = st; if (i["norm"+z]!==undefined) r["norm"+z] = Number(i["norm"+z])||0; });
+        ["20","40"].forEach(z=>{ const e = end && end[l.id] && end[l.id]["c"+z]; let st = i["resource"+z]; if (e) st = (i["adj"+z]!==undefined && i["adj"+z]!==null && i["adj"+z]!=="") ? Math.max(0, Number(i["adj"+z])||0) : e.end; else if (st!==undefined) st = Number(st)||0; if (st!==undefined) r["resource"+z] = st; if (i["norm"+z]!==undefined) r["norm"+z] = Number(i["norm"+z])||0; });
         const p = (nx.plan||{})[l.id]||{}; DIRECTIONS.forEach(d=>{ const q = p[d.key]||{}; state.plan[l.id][d.key] = { c20:Number(q.c20)||0, c40:Number(q.c40)||0 }; });
       });
       ROUTES.forEach(rt=>{ if (nx.routes && nx.routes[rt.key]!==undefined && state.routes[rt.key]) state.routes[rt.key].plan = Number(nx.routes[rt.key])||0; });
@@ -4554,6 +4556,34 @@ async function subsResetAll(){
   try { for (const id of Object.keys(ONLINE.users)) await api("PUT","/api/users/"+id,{ subsReset:true }); mainToast("Настройки сброшены"); }
   catch(e){ mainToast((e&&e.message)||"Не получилось"); }
 }
+
+// ---------- ввод как в Excel: стрелки, Enter между ячейками во всём инструменте ----------
+(function(){
+  const st = document.createElement("style");
+  st.textContent = "table.nxt{width:100%;table-layout:auto;font-size:12.5px}table.nxt th,table.nxt td{padding:4px 6px}table.nxt th{font-size:11.5px;line-height:1.2}table.nxt input.fld{padding:3px 5px}";
+  document.head.appendChild(st);
+  function cells(){ return Array.from(document.querySelectorAll("#content input:not([type=checkbox]):not([type=file]):not([type=month]):not([type=radio]):not([type=date])")).filter(e=>!e.disabled && !e.readOnly && e.offsetParent!==null); }
+  document.addEventListener("keydown", function(e){
+    const k = e.key; if (k!=="ArrowUp"&&k!=="ArrowDown"&&k!=="ArrowLeft"&&k!=="ArrowRight"&&k!=="Enter") return;
+    const el = e.target; if (!el || el.tagName!=="INPUT" || !el.closest("#content")) return;
+    if (e.ctrlKey||e.altKey||e.metaKey||e.shiftKey) return;
+    if (!el.closest("table") && !el.closest(".numfield")) return;
+    const len = el.value.length, s0 = el.selectionStart, s1 = el.selectionEnd;
+    if (k==="ArrowRight" && s1!==len) return;
+    if (k==="ArrowLeft" && s0!==0) return;
+    const all = cells(), r = el.getBoundingClientRect(), cx = r.left+r.width/2, cy = r.top+r.height/2;
+    let best = null, bd = 1e9;
+    all.forEach(o=>{ if (o===el) return; const q = o.getBoundingClientRect(), ox = q.left+q.width/2, oy = q.top+q.height/2, dx = ox-cx, dy = oy-cy;
+      let d = null;
+      if (k==="ArrowDown"||k==="Enter") { if (dy > r.height*0.6) d = dy*4 + Math.abs(dx); }
+      else if (k==="ArrowUp") { if (dy < -r.height*0.6) d = -dy*4 + Math.abs(dx); }
+      else if (k==="ArrowRight") { if (dx > r.width*0.4 && Math.abs(dy) < r.height*0.6) d = dx + Math.abs(dy)*4; }
+      else if (k==="ArrowLeft") { if (dx < -r.width*0.4 && Math.abs(dy) < r.height*0.6) d = -dx + Math.abs(dy)*4; }
+      if (d!==null && d<bd) { bd = d; best = o; } });
+    e.stopPropagation(); e.preventDefault();
+    if (best) { best.focus(); try { best.select(); } catch(x){} }
+  }, true);
+})();
 
 // ===== Хранение контейнеров на терминалах (только админ и Эксплуатация) =====
 const STG = { loaded:false, loading:false, err:"", cfg:{terminals:[]}, months:[], today:"", ym:"", res:null, terms:{}, meta:null, noData:false,
